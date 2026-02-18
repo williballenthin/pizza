@@ -1,27 +1,80 @@
 import type { WebSocket } from "ws";
 import type { SessionManager } from "./session-manager.js";
-import type { ClientMessage, RpcEvent, ServerMessage } from "@shared/types.js";
+import type {
+  ClientMessage,
+  RpcEvent,
+  ServerMessage,
+  ModelInfo,
+} from "@shared/types.js";
 
-/**
- * Handle a WebSocket connection for a specific session.
- */
-export function handleSessionWebSocket(
+export async function handleSessionWebSocket(
   ws: WebSocket,
   sessionId: string,
   sessions: SessionManager,
-): void {
-  let messageCount = 0;
+): Promise<void> {
+  const pendingCommands = new Map<string, string>();
 
   const listener = (event: RpcEvent) => {
+    if (event.type === "response") {
+      const id = event.id as string;
+      const cmdType = pendingCommands.get(id);
+      if (cmdType) {
+        pendingCommands.delete(id);
+        const data = event.data as Record<string, unknown> | undefined;
+
+        if (cmdType === "get_state") {
+          const model = data?.model as
+            | { provider?: string; modelId?: string; id?: string }
+            | null
+            | undefined;
+          sendJson(ws, {
+            type: "state",
+            model: model
+              ? {
+                  provider: model.provider || "",
+                  id: model.modelId || model.id || "",
+                }
+              : null,
+            thinkingLevel: (data?.thinkingLevel as string) || "off",
+            isStreaming: (data?.isStreaming as boolean) || false,
+            messages: [],
+          });
+          const msgId = rpc.send({ type: "get_messages" });
+          pendingCommands.set(msgId, "get_messages");
+          return;
+        }
+
+        if (cmdType === "get_available_models") {
+          const rawModels =
+            (data?.models as Array<Record<string, unknown>>) || [];
+          sendJson(ws, {
+            type: "available_models",
+            models: rawModels.map((m): ModelInfo => ({
+              provider: (m.provider as string) || "",
+              id: (m.modelId as string) || (m.id as string) || "",
+              label:
+                (m.name as string) ||
+                (m.label as string) ||
+                (m.modelId as string) ||
+                (m.id as string) ||
+                "",
+            })),
+          });
+          return;
+        }
+
+        // get_messages and others — pass through as agent_event
+      }
+    }
     sendJson(ws, { type: "agent_event", event });
   };
 
-  let rpc = sessions.getOrSpawn(sessionId, listener);
+  let rpc = await sessions.getOrSpawn(sessionId, listener);
 
-  // Send initial state request
-  rpc.send({ type: "get_state" });
+  const stateId = rpc.send({ type: "get_state" });
+  pendingCommands.set(stateId, "get_state");
 
-  ws.on("message", (data) => {
+  ws.on("message", async (data) => {
     let msg: ClientMessage;
     try {
       msg = JSON.parse(data.toString());
@@ -31,38 +84,33 @@ export function handleSessionWebSocket(
     }
 
     if (!rpc.alive) {
-      // Re-spawn if needed
-      rpc = sessions.getOrSpawn(sessionId, listener);
+      rpc = await sessions.getOrSpawn(sessionId, listener);
     }
 
     switch (msg.type) {
       case "prompt":
-        messageCount++;
-        if (messageCount === 1) {
-          sessions.autoName(sessionId, msg.text);
-        }
-        sessions.touchSession(sessionId);
-        rpc.send({ type: "prompt", content: [{ type: "text", text: msg.text }] });
+        rpc.send({ type: "prompt", message: msg.text });
         break;
 
       case "steer":
-        sessions.touchSession(sessionId);
-        rpc.send({ type: "steer", content: [{ type: "text", text: msg.text }] });
+        rpc.send({ type: "steer", message: msg.text });
         break;
 
       case "abort":
         rpc.send({ type: "abort" });
         break;
 
-      case "get_state":
-        rpc.send({ type: "get_state" });
+      case "get_state": {
+        const id = rpc.send({ type: "get_state" });
+        pendingCommands.set(id, "get_state");
         break;
+      }
 
       case "set_model":
         rpc.send({
           type: "set_model",
           provider: msg.provider,
-          model: msg.model,
+          modelId: msg.model,
         });
         break;
 
@@ -70,9 +118,11 @@ export function handleSessionWebSocket(
         rpc.send({ type: "set_thinking_level", level: msg.level });
         break;
 
-      case "get_available_models":
-        rpc.send({ type: "get_available_models" });
+      case "get_available_models": {
+        const id = rpc.send({ type: "get_available_models" });
+        pendingCommands.set(id, "get_available_models");
         break;
+      }
 
       default:
         sendJson(ws, {

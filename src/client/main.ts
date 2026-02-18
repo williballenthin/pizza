@@ -1,24 +1,14 @@
 // Pi-web-ui CSS (Tailwind + mini-lit theme) — must load before components
 import "@mariozechner/pi-web-ui/app.css";
 
-// Mini-lit MarkdownBlock — used by pi-web-ui message components in templates
-// but not imported by them directly (loaded via custom element name)
-import "@mariozechner/mini-lit/dist/MarkdownBlock.js";
-
-// Pi-web-ui components — registers <message-list>, <user-message>,
-// <assistant-message>, <tool-message>, <thinking-block>, etc.
-import {
-  MessageList as _ML,
-  UserMessage as _UM,
-  AssistantMessage as _AM,
-  ToolMessage as _TM,
-  ThinkingBlock as _TB,
-  StreamingMessageContainer as _SMC,
-} from "@mariozechner/pi-web-ui";
+// NOTE: We only import pi-web-ui CSS. The JS component bundle currently
+// triggers Lit class-field shadowing errors in dev, so message rendering is
+// implemented by local components.
 
 // Our components
 import "./components/app-root.js";
 import "./components/session-list.js";
+import "./components/message-list.js";
 import "./components/chat-view.js";
 import "./components/settings-panel.js";
 import "./components/chat-input.js";

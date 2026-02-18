@@ -58,6 +58,7 @@ export class ChatView extends LitElement {
   @state() private connected = false;
   @state() private reconnecting = false;
   @state() private error = "";
+  @state() private modelsLoaded = false;
   @state() private renamingName = false;
   @state() private editName = "";
   @state() private wasInterrupted = false;
@@ -181,6 +182,9 @@ export class ChatView extends LitElement {
         if (msg.model) {
           this.currentProvider = msg.model.provider;
           this.currentModel = msg.model.id;
+        } else {
+          this.currentProvider = "";
+          this.currentModel = "";
         }
         this.currentThinkingLevel =
           (msg.thinkingLevel as ThinkingLevel) || "off";
@@ -193,6 +197,7 @@ export class ChatView extends LitElement {
 
       case "available_models":
         this.models = msg.models;
+        this.modelsLoaded = true;
         break;
 
       case "error":
@@ -544,9 +549,13 @@ export class ChatView extends LitElement {
             Connection lost. Reconnecting&hellip;
           </div>`
         : nothing}
-      ${this.error
-        ? html`<div class="cv-banner error">${this.error}</div>`
-        : nothing}
+      ${this.connected && this.modelsLoaded && !this.currentModel
+        ? html`<div class="cv-banner warning">
+            No model available. Configure an API key or model provider in pi.
+          </div>`
+        : this.error
+          ? html`<div class="cv-banner error">${this.error}</div>`
+          : nothing}
 
       <div class="cv-messages">
         <message-list
@@ -568,6 +577,7 @@ export class ChatView extends LitElement {
 
       <chat-input
         .isStreaming=${this.isStreaming}
+        .disabled=${this.modelsLoaded && !this.currentModel}
         @send=${this.onSend}
         @steer=${this.onSteer}
         @stop=${this.onStop}

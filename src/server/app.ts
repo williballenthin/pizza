@@ -55,7 +55,10 @@ export function createApp(config: ServerConfig): AppInstance {
       return;
     }
     wss.handleUpgrade(req, socket, head, (ws) => {
-      handleSessionWebSocket(ws, match[1], sessions);
+      handleSessionWebSocket(ws, match[1], sessions).catch((err) => {
+        console.error(`[ws] Session setup failed: ${err}`);
+        ws.close(1011, "Session setup failed");
+      });
     });
   });
 

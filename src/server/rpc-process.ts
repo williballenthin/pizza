@@ -2,10 +2,6 @@ import { ChildProcess, spawn } from "child_process";
 import { EventEmitter } from "events";
 import type { RpcEvent } from "@shared/types.js";
 
-/**
- * Manages a single pi agent RPC subprocess.
- * Communicates via newline-delimited JSON on stdin/stdout.
- */
 export class RpcProcess extends EventEmitter {
   private proc: ChildProcess | null = null;
   private buffer = "";
@@ -14,8 +10,8 @@ export class RpcProcess extends EventEmitter {
 
   constructor(
     private piCommand: string,
-    private sessionDir: string,
-    private sessionId: string,
+    private cwd: string,
+    private sessionFile: string | undefined,
     private env: Record<string, string>,
   ) {
     super();
@@ -25,24 +21,18 @@ export class RpcProcess extends EventEmitter {
     return this._alive;
   }
 
-  /**
-   * Spawn the RPC subprocess.
-   */
   start(): void {
     if (this._alive) return;
 
-    const args = [
-      "--mode",
-      "rpc",
-      "--session-dir",
-      this.sessionDir,
-      "--session-id",
-      this.sessionId,
-    ];
+    const args = ["--mode", "rpc"];
+    if (this.sessionFile) {
+      args.push("--session", this.sessionFile);
+    }
 
     try {
       this.proc = spawn(this.piCommand, args, {
         stdio: ["pipe", "pipe", "pipe"],
+        cwd: this.cwd,
         env: { ...process.env, ...this.env },
       });
     } catch (err) {
@@ -61,7 +51,7 @@ export class RpcProcess extends EventEmitter {
     this.proc.stderr!.on("data", (chunk: Buffer) => {
       const text = chunk.toString().trim();
       if (text) {
-        console.error(`[rpc:${this.sessionId}] stderr: ${text}`);
+        console.error(`[rpc] stderr: ${text}`);
       }
     });
 
@@ -76,9 +66,6 @@ export class RpcProcess extends EventEmitter {
     });
   }
 
-  /**
-   * Send a command to the RPC subprocess.
-   */
   send(command: Record<string, unknown>): string {
     if (!this.proc || !this._alive) {
       throw new Error("RPC process is not running");
@@ -89,9 +76,33 @@ export class RpcProcess extends EventEmitter {
     return id;
   }
 
-  /**
-   * Gracefully terminate the subprocess.
-   */
+  sendAndWait(
+    command: Record<string, unknown>,
+    timeoutMs = 10000,
+  ): Promise<Record<string, unknown>> {
+    const id = this.send(command);
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.removeListener("event", handler);
+        reject(new Error(`RPC command '${command.type}' timed out`));
+      }, timeoutMs);
+
+      const handler = (event: RpcEvent) => {
+        if (event.type === "response" && event.id === id) {
+          clearTimeout(timer);
+          this.removeListener("event", handler);
+          if ((event as Record<string, unknown>).success === false) {
+            reject(new Error((event as Record<string, unknown>).error as string || "RPC command failed"));
+          } else {
+            resolve(event as Record<string, unknown>);
+          }
+        }
+      };
+
+      this.on("event", handler);
+    });
+  }
+
   stop(): void {
     if (this.proc && this._alive) {
       this.proc.stdin!.end();
@@ -100,9 +111,6 @@ export class RpcProcess extends EventEmitter {
     }
   }
 
-  /**
-   * Force-kill the subprocess.
-   */
   kill(): void {
     if (this.proc) {
       this.proc.kill("SIGKILL");
@@ -112,7 +120,6 @@ export class RpcProcess extends EventEmitter {
 
   private processBuffer(): void {
     const lines = this.buffer.split("\n");
-    // Keep the last (possibly incomplete) line in the buffer
     this.buffer = lines.pop() || "";
 
     for (const line of lines) {
@@ -122,8 +129,7 @@ export class RpcProcess extends EventEmitter {
         const parsed = JSON.parse(trimmed) as RpcEvent;
         this.emit("event", parsed);
       } catch {
-        // Not JSON — might be raw output, log and skip
-        console.error(`[rpc:${this.sessionId}] non-json: ${trimmed}`);
+        console.error(`[rpc] non-json: ${trimmed}`);
       }
     }
   }

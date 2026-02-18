@@ -1,22 +1,29 @@
-import { resolve } from "path";
+import { join } from "path";
 import { homedir } from "os";
 
 export interface ServerConfig {
   port: number;
   sessionDir: string;
+  cwd: string;
   defaultModel: string | null;
   defaultThinkingLevel: string;
   idleTimeoutMs: number;
   piCommand: string;
 }
 
+export function encodeCwd(cwd: string): string {
+  return `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
+}
+
 export function loadConfig(argv: string[]): ServerConfig {
   const args = parseArgs(argv);
+
+  const cwd = process.cwd();
 
   const sessionDir =
     args["session-dir"] ||
     process.env.PI_SESSION_DIR ||
-    resolve(homedir(), ".pi", "agent", "sessions");
+    join(homedir(), ".pi", "agent", "sessions", encodeCwd(cwd));
 
   const port = parseInt(
     args["port"] || process.env.PI_PORT || "3000",
@@ -34,6 +41,7 @@ export function loadConfig(argv: string[]): ServerConfig {
   return {
     port,
     sessionDir,
+    cwd,
     defaultModel,
     defaultThinkingLevel,
     idleTimeoutMs,

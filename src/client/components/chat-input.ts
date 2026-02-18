@@ -4,6 +4,7 @@ import { customElement, property, state, query } from "lit/decorators.js";
 @customElement("chat-input")
 export class ChatInput extends LitElement {
   @property({ type: Boolean }) isStreaming = false;
+  @property({ type: Boolean }) disabled = false;
   @state() private text = "";
   @query("textarea") private textarea!: HTMLTextAreaElement;
 
@@ -79,6 +80,11 @@ export class ChatInput extends LitElement {
       cursor: default;
     }
 
+    textarea:disabled {
+      opacity: 0.5;
+      cursor: default;
+    }
+
     .send-btn.stop {
       background: var(--error);
       color: white;
@@ -93,9 +99,10 @@ export class ChatInput extends LitElement {
     return html`
       <div class="input-row">
         <textarea
-          placeholder="Type a message..."
+          placeholder=${this.disabled ? "No model available" : "Type a message..."}
           rows="1"
           .value=${this.text}
+          ?disabled=${this.disabled}
           @input=${this.onInput}
           @keydown=${this.onKeydown}
         ></textarea>
@@ -109,7 +116,7 @@ export class ChatInput extends LitElement {
               <button
                 class="send-btn send"
                 @click=${this.onSend}
-                ?disabled=${!this.text.trim()}
+                ?disabled=${this.disabled || !this.text.trim()}
                 title="Send"
               >
                 &#9654;

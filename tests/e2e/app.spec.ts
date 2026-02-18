@@ -167,6 +167,43 @@ test.describe("Chat View", () => {
     );
     await expect(page.locator("session-list")).toBeAttached();
   });
+
+  test("renders user and assistant messages in message-list", async ({ page }) => {
+    await page.goto(`/#/session/${sessionId}`);
+    await expect(page.locator("chat-view")).toBeAttached();
+
+    await page.locator("chat-view").evaluate((el) => {
+      const view = el as unknown as {
+        messages: unknown[];
+        requestUpdate: () => void;
+      };
+      view.messages = [
+        { role: "user", content: "hello", timestamp: Date.now() },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "hi there" }],
+          timestamp: Date.now(),
+        },
+      ];
+      view.requestUpdate();
+    });
+
+    await page.waitForTimeout(200);
+
+    const rendered = await page.locator("chat-view").evaluate((el) => {
+      const list = el.querySelector("message-list");
+      return {
+        user: list?.querySelectorAll(".ml-user").length ?? 0,
+        assistant: list?.querySelectorAll(".ml-assistant").length ?? 0,
+        text: list?.textContent || "",
+      };
+    });
+
+    expect(rendered.user).toBe(1);
+    expect(rendered.assistant).toBe(1);
+    expect(rendered.text).toContain("hello");
+    expect(rendered.text).toContain("hi there");
+  });
 });
 
 test.describe("Settings Panel", () => {

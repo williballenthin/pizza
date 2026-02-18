@@ -18,8 +18,14 @@ export function createRouter(sessions: SessionManager): Router {
 
   // Create session
   router.post("/sessions", async (_req, res) => {
-    const id = await sessions.createSession();
-    res.status(201).json({ id });
+    try {
+      const id = await sessions.createSession();
+      res.status(201).json({ id });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to create session";
+      console.error(`[POST /sessions] ${message}`);
+      res.status(500).json({ error: message });
+    }
   });
 
   // Update session

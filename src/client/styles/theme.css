@@ -210,6 +210,75 @@ chat-view {
   scroll-behavior: smooth;
 }
 
+.ml-list {
+  max-width: var(--max-width);
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.ml-row {
+  display: flex;
+}
+
+.ml-row-user {
+  justify-content: flex-end;
+}
+
+.ml-row-assistant,
+.ml-row-tool {
+  justify-content: flex-start;
+}
+
+.ml-msg {
+  max-width: min(100%, 720px);
+  border-radius: var(--radius-lg);
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow);
+}
+
+.ml-user {
+  background: var(--accent);
+  color: white;
+  border-color: transparent;
+}
+
+.ml-assistant {
+  background: var(--surface);
+  color: var(--text-primary);
+}
+
+.ml-tool {
+  background: var(--tool-bg);
+  color: var(--text-primary);
+  border-color: var(--tool-border);
+}
+
+.ml-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.ml-thinking {
+  white-space: pre-wrap;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  border-left: 2px solid var(--thinking-border);
+  background: var(--thinking-bg);
+  padding: 6px 8px;
+  border-radius: 6px;
+}
+
+.ml-toolcall {
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+  border: 1px dashed var(--border);
+  border-radius: 6px;
+  padding: 6px 8px;
+}
+
 .cv-banner {
   padding: 8px 16px;
   text-align: center;
@@ -225,6 +294,12 @@ chat-view {
 .cv-banner.error {
   background: var(--error-bg);
   color: var(--error);
+}
+
+.cv-banner.warning {
+  background: #fef3cd;
+  color: #856404;
+  font-weight: 500;
 }
 
 .cv-streaming-indicator {

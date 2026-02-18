@@ -1,39 +1,108 @@
-import { describe, it, expect, beforeAll, afterAll, beforeEach } from "vitest";
+import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { createApp, type AppInstance } from "../../src/server/app.js";
 import type { ServerConfig } from "../../src/server/config.js";
-import { mkdtemp, rm } from "fs/promises";
+import { mkdtemp, rm, writeFile } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
+import { execSync } from "child_process";
 import type { AddressInfo } from "net";
 
-let app: AppInstance;
-let baseUrl: string;
-let sessionDir: string;
+function hasPi(): boolean {
+  try {
+    execSync("pi --version", { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
 
-beforeAll(async () => {
-  sessionDir = await mkdtemp(join(tmpdir(), "pi-web-test-"));
-  const config: ServerConfig = {
-    port: 0, // random port
-    sessionDir,
-    defaultModel: null,
-    defaultThinkingLevel: "off",
-    idleTimeoutMs: 5000,
-    piCommand: "pi",
-  };
-  app = createApp(config);
-  await new Promise<void>((resolve) => {
-    app.server.listen(0, () => resolve());
-  });
-  const addr = app.server.address() as AddressInfo;
-  baseUrl = `http://localhost:${addr.port}`;
-});
+const PI_AVAILABLE = hasPi();
 
-afterAll(async () => {
-  await app.close();
-  await rm(sessionDir, { recursive: true, force: true });
-});
+function makeSessionJsonl(
+  id: string,
+  opts: {
+    timestamp?: string;
+    name?: string;
+    messages?: Array<{ role: string; content: string; timestamp?: string }>;
+  } = {},
+): string {
+  const ts = opts.timestamp || new Date().toISOString();
+  const lines: string[] = [];
+
+  lines.push(
+    JSON.stringify({
+      type: "session",
+      version: 3,
+      id,
+      timestamp: ts,
+      cwd: "/tmp/test",
+    }),
+  );
+
+  let parentId: string | null = null;
+  let entryIdx = 0;
+
+  if (opts.messages) {
+    for (const msg of opts.messages) {
+      const entryId = `e${String(entryIdx++).padStart(7, "0")}`;
+      lines.push(
+        JSON.stringify({
+          type: "message",
+          id: entryId,
+          parentId,
+          timestamp: msg.timestamp || ts,
+          message: { role: msg.role, content: msg.content },
+        }),
+      );
+      parentId = entryId;
+    }
+  }
+
+  if (opts.name) {
+    const entryId = `e${String(entryIdx++).padStart(7, "0")}`;
+    lines.push(
+      JSON.stringify({
+        type: "session_info",
+        id: entryId,
+        parentId,
+        timestamp: ts,
+        name: opts.name,
+      }),
+    );
+  }
+
+  return lines.join("\n") + "\n";
+}
 
 describe("GET /api/health", () => {
+  let app: AppInstance;
+  let baseUrl: string;
+  let sessionDir: string;
+
+  beforeAll(async () => {
+    sessionDir = await mkdtemp(join(tmpdir(), "pi-web-test-"));
+    const config: ServerConfig = {
+      port: 0,
+      sessionDir,
+      cwd: sessionDir,
+      defaultModel: null,
+      defaultThinkingLevel: "off",
+      idleTimeoutMs: 5000,
+      piCommand: "pi",
+    };
+    app = createApp(config);
+    await new Promise<void>((resolve) => {
+      app.server.listen(0, () => resolve());
+    });
+    const addr = app.server.address() as AddressInfo;
+    baseUrl = `http://localhost:${addr.port}`;
+  });
+
+  afterAll(async () => {
+    await app.close();
+    await rm(sessionDir, { recursive: true, force: true });
+  });
+
   it("returns status ok", async () => {
     const res = await fetch(`${baseUrl}/api/health`);
     expect(res.status).toBe(200);
@@ -43,37 +112,106 @@ describe("GET /api/health", () => {
   });
 });
 
-describe("Session CRUD", () => {
-  let createdId: string;
+describe("Session listing from JSONL files", () => {
+  let app: AppInstance;
+  let baseUrl: string;
+  let sessionDir: string;
 
-  it("POST /api/sessions creates a session", async () => {
-    const res = await fetch(`${baseUrl}/api/sessions`, { method: "POST" });
-    expect(res.status).toBe(201);
-    const data = await res.json();
-    expect(data.id).toBeDefined();
-    expect(typeof data.id).toBe("string");
-    createdId = data.id;
+  beforeAll(async () => {
+    sessionDir = await mkdtemp(join(tmpdir(), "pi-web-test-"));
+
+    const id1 = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    const id2 = "11111111-2222-3333-4444-555555555555";
+
+    await writeFile(
+      join(sessionDir, "2026-01-01T00-00-00_" + id1 + ".jsonl"),
+      makeSessionJsonl(id1, {
+        timestamp: "2026-01-01T00:00:00.000Z",
+        name: "First Session",
+        messages: [
+          { role: "user", content: "Hello", timestamp: "2026-01-01T00:00:01.000Z" },
+          { role: "assistant", content: "Hi!", timestamp: "2026-01-01T00:00:02.000Z" },
+        ],
+      }),
+    );
+
+    await writeFile(
+      join(sessionDir, "2026-01-02T00-00-00_" + id2 + ".jsonl"),
+      makeSessionJsonl(id2, {
+        timestamp: "2026-01-02T00:00:00.000Z",
+        messages: [
+          { role: "user", content: "Tell me about TypeScript generics and how they work", timestamp: "2026-01-02T00:00:01.000Z" },
+        ],
+      }),
+    );
+
+    const config: ServerConfig = {
+      port: 0,
+      sessionDir,
+      cwd: sessionDir,
+      defaultModel: null,
+      defaultThinkingLevel: "off",
+      idleTimeoutMs: 5000,
+      piCommand: "pi",
+    };
+    app = createApp(config);
+    await new Promise<void>((resolve) => {
+      app.server.listen(0, () => resolve());
+    });
+    const addr = app.server.address() as AddressInfo;
+    baseUrl = `http://localhost:${addr.port}`;
   });
 
-  it("GET /api/sessions lists sessions", async () => {
+  afterAll(async () => {
+    await app.close();
+    await rm(sessionDir, { recursive: true, force: true });
+  });
+
+  it("lists sessions from JSONL files with correct metadata", async () => {
     const res = await fetch(`${baseUrl}/api/sessions`);
     expect(res.status).toBe(200);
     const data = await res.json();
-    expect(data.sessions).toBeInstanceOf(Array);
-    expect(data.sessions.length).toBeGreaterThanOrEqual(1);
+    expect(data.sessions).toHaveLength(2);
 
-    const session = data.sessions.find(
-      (s: { id: string }) => s.id === createdId,
+    const s1 = data.sessions.find(
+      (s: { id: string }) => s.id === "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
     );
-    expect(session).toBeDefined();
-    expect(session.name).toBe("New Session");
-    expect(session.createdAt).toBeDefined();
-    expect(session.lastActivityAt).toBeDefined();
-    expect(typeof session.messageCount).toBe("number");
+    expect(s1).toBeDefined();
+    expect(s1.name).toBe("First Session");
+    expect(s1.messageCount).toBe(2);
+    expect(s1.createdAt).toBe("2026-01-01T00:00:00.000Z");
+
+    const s2 = data.sessions.find(
+      (s: { id: string }) => s.id === "11111111-2222-3333-4444-555555555555",
+    );
+    expect(s2).toBeDefined();
+    expect(s2.name).toBe("Tell me about TypeScript generics and how they work");
+    expect(s2.messageCount).toBe(1);
   });
 
-  it("PATCH /api/sessions/:id updates session name", async () => {
-    const res = await fetch(`${baseUrl}/api/sessions/${createdId}`, {
+  it("sessions are sorted by lastActivityAt descending", async () => {
+    const res = await fetch(`${baseUrl}/api/sessions`);
+    const data = await res.json();
+    expect(data.sessions[0].id).toBe("11111111-2222-3333-4444-555555555555");
+    expect(data.sessions[1].id).toBe("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
+  });
+
+  it("DELETE removes a JSONL session", async () => {
+    const id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
+    const res = await fetch(`${baseUrl}/api/sessions/${id}`, {
+      method: "DELETE",
+    });
+    expect(res.status).toBe(204);
+
+    const listRes = await fetch(`${baseUrl}/api/sessions`);
+    const data = await listRes.json();
+    expect(data.sessions).toHaveLength(1);
+    expect(data.sessions[0].id).toBe("11111111-2222-3333-4444-555555555555");
+  });
+
+  it("PATCH renames a session by appending session_info", async () => {
+    const id = "11111111-2222-3333-4444-555555555555";
+    const res = await fetch(`${baseUrl}/api/sessions/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: "Renamed Session" }),
@@ -81,113 +219,166 @@ describe("Session CRUD", () => {
     expect(res.status).toBe(200);
     const data = await res.json();
     expect(data.name).toBe("Renamed Session");
+
+    const listRes = await fetch(`${baseUrl}/api/sessions`);
+    const listData = await listRes.json();
+    expect(listData.sessions[0].name).toBe("Renamed Session");
   });
 
-  it("GET /api/sessions reflects the rename", async () => {
-    const res = await fetch(`${baseUrl}/api/sessions`);
-    const data = await res.json();
-    const session = data.sessions.find(
-      (s: { id: string }) => s.id === createdId,
-    );
-    expect(session.name).toBe("Renamed Session");
-  });
-
-  it("DELETE /api/sessions/:id deletes a session", async () => {
-    const res = await fetch(`${baseUrl}/api/sessions/${createdId}`, {
-      method: "DELETE",
-    });
-    expect(res.status).toBe(204);
-  });
-
-  it("GET /api/sessions no longer contains deleted session", async () => {
-    const res = await fetch(`${baseUrl}/api/sessions`);
-    const data = await res.json();
-    const session = data.sessions.find(
-      (s: { id: string }) => s.id === createdId,
-    );
-    expect(session).toBeUndefined();
-  });
-
-  it("PATCH /api/sessions/:id returns 404 for unknown session", async () => {
-    const res = await fetch(`${baseUrl}/api/sessions/nonexistent`, {
+  it("PATCH returns 404 for unknown session", async () => {
+    const res = await fetch(`${baseUrl}/api/sessions/nonexistent-id`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ name: "test" }),
     });
     expect(res.status).toBe(404);
   });
-});
 
-describe("Session sort order", () => {
-  it("sessions are sorted by lastActivityAt descending", async () => {
-    // Create two sessions with a slight time gap
-    const res1 = await fetch(`${baseUrl}/api/sessions`, { method: "POST" });
-    const { id: id1 } = await res1.json();
-
-    // Small delay to ensure different timestamps
-    await new Promise((r) => setTimeout(r, 50));
-
-    const res2 = await fetch(`${baseUrl}/api/sessions`, { method: "POST" });
-    const { id: id2 } = await res2.json();
-
-    const listRes = await fetch(`${baseUrl}/api/sessions`);
-    const data = await listRes.json();
-
-    const idx1 = data.sessions.findIndex(
-      (s: { id: string }) => s.id === id1,
-    );
-    const idx2 = data.sessions.findIndex(
-      (s: { id: string }) => s.id === id2,
-    );
-
-    // id2 was created later, so it should appear first
-    expect(idx2).toBeLessThan(idx1);
-
-    // Cleanup
-    await fetch(`${baseUrl}/api/sessions/${id1}`, { method: "DELETE" });
-    await fetch(`${baseUrl}/api/sessions/${id2}`, { method: "DELETE" });
+  it("DELETE returns 404 for unknown session", async () => {
+    const res = await fetch(`${baseUrl}/api/sessions/nonexistent-id`, {
+      method: "DELETE",
+    });
+    expect(res.status).toBe(404);
   });
 });
 
-describe("WebSocket connection", () => {
-  it("connects to a session WebSocket endpoint", async () => {
-    // Create a session
-    const res = await fetch(`${baseUrl}/api/sessions`, { method: "POST" });
-    const { id } = await res.json();
+describe("Session CRUD with real pi", () => {
+  if (!PI_AVAILABLE) {
+    it.skip("pi not installed — skipping real session tests", () => {});
+    return;
+  }
 
-    const addr = app.server.address() as AddressInfo;
-    const wsUrl = `ws://localhost:${addr.port}/api/sessions/${id}/ws`;
+  let app: AppInstance;
+  let baseUrl: string;
+  let sessionDir: string;
+  let cwd: string;
 
-    const ws = new WebSocket(wsUrl);
+  beforeAll(async () => {
+    sessionDir = await mkdtemp(join(tmpdir(), "pi-web-test-sessions-"));
+    cwd = await mkdtemp(join(tmpdir(), "pi-web-test-cwd-"));
 
-    // Wait for the WebSocket to open or receive a message.
-    // The RPC subprocess may fail to spawn if pi is not installed — that's fine.
-    // We're testing that the WebSocket endpoint itself works.
-    const result = await new Promise<string>((resolve) => {
-      const timer = setTimeout(() => resolve("timeout"), 5000);
-      ws.onopen = () => {
-        clearTimeout(timer);
-        resolve("open");
-      };
-      ws.onerror = () => {
-        clearTimeout(timer);
-        resolve("error");
-      };
-      ws.onclose = () => {
-        clearTimeout(timer);
-        resolve("closed");
-      };
+    const config: ServerConfig = {
+      port: 0,
+      sessionDir,
+      cwd,
+      defaultModel: null,
+      defaultThinkingLevel: "off",
+      idleTimeoutMs: 30000,
+      piCommand: "pi",
+    };
+    app = createApp(config);
+    await new Promise<void>((resolve) => {
+      app.server.listen(0, () => resolve());
     });
+    const addr = app.server.address() as AddressInfo;
+    baseUrl = `http://localhost:${addr.port}`;
+  });
 
-    // The WebSocket should have at least opened successfully
-    // (even if it then receives an error event because pi isn't installed)
-    expect(["open", "closed", "error"]).toContain(result);
+  afterAll(async () => {
+    await app.close();
+    await rm(sessionDir, { recursive: true, force: true });
+    await rm(cwd, { recursive: true, force: true });
+  });
 
-    if (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING) {
-      ws.close();
-    }
+  let createdId: string;
 
-    // Cleanup
-    await fetch(`${baseUrl}/api/sessions/${id}`, { method: "DELETE" });
+  it("POST /api/sessions creates a session with UUID", async () => {
+    const res = await fetch(`${baseUrl}/api/sessions`, { method: "POST" });
+    expect(res.status).toBe(201);
+    const data = await res.json();
+    expect(data.id).toBeDefined();
+    expect(data.id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
+    createdId = data.id;
+  });
+
+  it("GET /api/sessions lists the new session", async () => {
+    const res = await fetch(`${baseUrl}/api/sessions`);
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.sessions.length).toBeGreaterThanOrEqual(1);
+
+    const session = data.sessions.find(
+      (s: { id: string }) => s.id === createdId,
+    );
+    expect(session).toBeDefined();
+    expect(session.createdAt).toBeDefined();
+    expect(session.lastActivityAt).toBeDefined();
+    expect(typeof session.messageCount).toBe("number");
+  });
+
+  it("PATCH /api/sessions/:id renames the session", async () => {
+    const res = await fetch(`${baseUrl}/api/sessions/${createdId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Test Rename" }),
+    });
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.name).toBe("Test Rename");
+  });
+
+  it("DELETE /api/sessions/:id removes the session", async () => {
+    const res = await fetch(`${baseUrl}/api/sessions/${createdId}`, {
+      method: "DELETE",
+    });
+    expect(res.status).toBe(204);
+
+    const listRes = await fetch(`${baseUrl}/api/sessions`);
+    const data = await listRes.json();
+    const session = data.sessions.find(
+      (s: { id: string }) => s.id === createdId,
+    );
+    expect(session).toBeUndefined();
+  });
+}, 30000);
+
+describe("Session name fallbacks", () => {
+  let app: AppInstance;
+  let baseUrl: string;
+  let sessionDir: string;
+
+  beforeAll(async () => {
+    sessionDir = await mkdtemp(join(tmpdir(), "pi-web-test-"));
+
+    const id = "abcdef01-2345-6789-abcd-ef0123456789";
+    await writeFile(
+      join(sessionDir, "2026-01-01T00-00-00_" + id + ".jsonl"),
+      makeSessionJsonl(id, {
+        timestamp: "2026-01-01T00:00:00.000Z",
+      }),
+    );
+
+    const config: ServerConfig = {
+      port: 0,
+      sessionDir,
+      cwd: sessionDir,
+      defaultModel: null,
+      defaultThinkingLevel: "off",
+      idleTimeoutMs: 5000,
+      piCommand: "pi",
+    };
+    app = createApp(config);
+    await new Promise<void>((resolve) => {
+      app.server.listen(0, () => resolve());
+    });
+    const addr = app.server.address() as AddressInfo;
+    baseUrl = `http://localhost:${addr.port}`;
+  });
+
+  afterAll(async () => {
+    await app.close();
+    await rm(sessionDir, { recursive: true, force: true });
+  });
+
+  it("uses UUID-based fallback name when no name or messages", async () => {
+    const res = await fetch(`${baseUrl}/api/sessions`);
+    const data = await res.json();
+    const session = data.sessions.find(
+      (s: { id: string }) => s.id === "abcdef01-2345-6789-abcd-ef0123456789",
+    );
+    expect(session).toBeDefined();
+    expect(session.name).toBe("Session abcdef01");
   });
 });
