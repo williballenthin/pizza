@@ -1,6 +1,10 @@
 import { LitElement, html, css, nothing } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import type { ModelInfo, ThinkingLevel } from "@shared/types.js";
+import type {
+  ModelInfo,
+  ThinkingLevel,
+  QueueDeliveryMode,
+} from "@shared/types.js";
 
 const THINKING_LEVELS: ThinkingLevel[] = [
   "off",
@@ -11,12 +15,18 @@ const THINKING_LEVELS: ThinkingLevel[] = [
   "xhigh",
 ];
 
+const QUEUE_MODES: QueueDeliveryMode[] = ["one-at-a-time", "all"];
+
 @customElement("settings-panel")
 export class SettingsPanel extends LitElement {
   @property({ type: Boolean }) open = false;
   @property({ type: String }) currentModel = "";
   @property({ type: String }) currentProvider = "";
   @property({ type: String }) currentThinkingLevel: ThinkingLevel = "off";
+  @property({ type: String }) currentSteeringMode: QueueDeliveryMode =
+    "one-at-a-time";
+  @property({ type: String }) currentFollowUpMode: QueueDeliveryMode =
+    "one-at-a-time";
   @property({ type: Array }) models: ModelInfo[] = [];
 
   @state() private theme: string =
@@ -263,6 +273,42 @@ export class SettingsPanel extends LitElement {
           </div>
 
           <div class="field">
+            <label>Steering Queue</label>
+            <div class="segmented">
+              ${QUEUE_MODES.map(
+                (mode) => html`
+                  <button
+                    class="seg-btn ${this.currentSteeringMode === mode
+                      ? "active"
+                      : ""}"
+                    @click=${() => this.onSteeringModeChange(mode)}
+                  >
+                    ${mode}
+                  </button>
+                `,
+              )}
+            </div>
+          </div>
+
+          <div class="field">
+            <label>Follow-up Queue</label>
+            <div class="segmented">
+              ${QUEUE_MODES.map(
+                (mode) => html`
+                  <button
+                    class="seg-btn ${this.currentFollowUpMode === mode
+                      ? "active"
+                      : ""}"
+                    @click=${() => this.onFollowUpModeChange(mode)}
+                  >
+                    ${mode}
+                  </button>
+                `,
+              )}
+            </div>
+          </div>
+
+          <div class="field">
             <label>Theme</label>
             <div class="theme-options">
               ${(["auto", "light", "dark"] as const).map(
@@ -298,6 +344,18 @@ export class SettingsPanel extends LitElement {
   private onThinkingChange(level: ThinkingLevel) {
     this.dispatchEvent(
       new CustomEvent("thinking-change", { detail: level }),
+    );
+  }
+
+  private onSteeringModeChange(mode: QueueDeliveryMode) {
+    this.dispatchEvent(
+      new CustomEvent("steering-mode-change", { detail: mode }),
+    );
+  }
+
+  private onFollowUpModeChange(mode: QueueDeliveryMode) {
+    this.dispatchEvent(
+      new CustomEvent("follow-up-mode-change", { detail: mode }),
     );
   }
 

@@ -204,6 +204,317 @@ test.describe("Chat View", () => {
     expect(rendered.text).toContain("hello");
     expect(rendered.text).toContain("hi there");
   });
+
+  test("renders markdown formatting in assistant message", async ({ page }) => {
+    await page.goto(`/#/session/${sessionId}`);
+    await expect(page.locator("chat-view")).toBeAttached();
+
+    await page.locator("chat-view").evaluate((el) => {
+      const view = el as unknown as {
+        messages: unknown[];
+        requestUpdate: () => void;
+      };
+      view.messages = [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "text",
+              text: "**bold**\n\n```js\nconsole.log('ok')\n```",
+            },
+          ],
+          timestamp: Date.now(),
+        },
+      ];
+      view.requestUpdate();
+    });
+
+    await page.waitForTimeout(200);
+
+    const markdown = await page.locator("chat-view").evaluate((el) => {
+      const list = el.querySelector("message-list");
+      return {
+        strong: !!list?.querySelector(".markdown-content strong"),
+        code: !!list?.querySelector(".markdown-content pre code"),
+        text: list?.textContent || "",
+      };
+    });
+
+    expect(markdown.strong).toBe(true);
+    expect(markdown.code).toBe(true);
+    expect(markdown.text).toContain("bold");
+    expect(markdown.text).toContain("console.log");
+  });
+
+  test("renders bash execution rows", async ({ page }) => {
+    await page.goto(`/#/session/${sessionId}`);
+    await expect(page.locator("chat-view")).toBeAttached();
+
+    await page.locator("chat-view").evaluate((el) => {
+      const view = el as unknown as {
+        messages: unknown[];
+        requestUpdate: () => void;
+      };
+      view.messages = [
+        {
+          role: "bashExecution",
+          command: "echo hello",
+          output: "hello",
+          excludeFromContext: true,
+          timestamp: Date.now(),
+        },
+      ];
+      view.requestUpdate();
+    });
+
+    await page.waitForTimeout(200);
+
+    const shell = await page.locator("chat-view").evaluate((el) => {
+      const details = el.querySelector(".bash-execution") as
+        | HTMLDetailsElement
+        | null;
+      return {
+        exists: !!details,
+        text: details?.textContent || "",
+      };
+    });
+
+    expect(shell.exists).toBe(true);
+    expect(shell.text).toContain("echo hello");
+    expect(shell.text).toContain("hello");
+    expect(shell.text).toContain("not in context");
+  });
+
+  test("shows slash command suggestions from discovered commands", async ({ page }) => {
+    await page.goto(`/#/session/${sessionId}`);
+    await expect(page.locator("chat-view")).toBeAttached();
+
+    await page.locator("chat-view").evaluate((el) => {
+      const view = el as unknown as {
+        commands: Array<{ name: string; source: "extension" | "prompt" | "skill" }>;
+        requestUpdate: () => void;
+      };
+      view.commands = [
+        { name: "project-info", source: "extension" },
+        { name: "summarize", source: "prompt" },
+      ];
+      view.requestUpdate();
+    });
+
+    await page.locator("chat-view").evaluate((el) => {
+      const input = el.querySelector("chat-input");
+      const ta = input?.shadowRoot?.querySelector("textarea") as
+        | HTMLTextAreaElement
+        | undefined;
+      if (!ta) return;
+      ta.value = "/";
+      ta.dispatchEvent(new Event("input", { bubbles: true, composed: true }));
+    });
+
+    await page.waitForTimeout(150);
+
+    const suggestionCount = await page.locator("chat-view").evaluate((el) => {
+      const input = el.querySelector("chat-input");
+      return (
+        input?.shadowRoot?.querySelectorAll(".command-item").length ?? 0
+      );
+    });
+
+    expect(suggestionCount).toBeGreaterThan(0);
+  });
+
+  test("renders extension confirm request and sends response", async ({ page }) => {
+    await page.goto(`/#/session/${sessionId}`);
+    await expect(page.locator("chat-view")).toBeAttached();
+
+    await page.locator("chat-view").evaluate((el) => {
+      const view = el as unknown as {
+        wsSend?: (msg: unknown) => void;
+        handleAgentEvent?: (event: unknown) => void;
+      };
+
+      (window as unknown as { __extResponse?: unknown }).__extResponse = undefined;
+      view.wsSend = (msg: unknown) => {
+        (window as unknown as { __extResponse?: unknown }).__extResponse = msg;
+      };
+
+      view.handleAgentEvent?.({
+        type: "extension_ui_request",
+        id: "ext-1",
+        method: "confirm",
+        title: "Extension confirmation",
+        message: "Proceed with operation?",
+      });
+    });
+
+    await page.waitForTimeout(120);
+
+    const dialogText = await page.locator("chat-view").evaluate((el) => {
+      const modal = el.querySelector(".cv-extension-modal");
+      return modal?.textContent || "";
+    });
+
+    expect(dialogText).toContain("Extension confirmation");
+    expect(dialogText).toContain("Proceed with operation?");
+
+    await page.locator("chat-view").evaluate((el) => {
+      const yesButton = Array.from(
+        el.querySelectorAll(".cv-extension-btn.primary"),
+      ).find((btn) => btn.textContent?.trim() === "Yes") as
+        | HTMLElement
+        | undefined;
+      yesButton?.click();
+    });
+
+    const response = await page.evaluate(() => {
+      return (window as unknown as { __extResponse?: unknown }).__extResponse;
+    });
+
+    expect(response).toEqual({
+      type: "extension_ui_response",
+      id: "ext-1",
+      confirmed: true,
+    });
+  });
+
+  test("tool calls are collapsible and show output when expanded", async ({ page }) => {
+    await page.goto(`/#/session/${sessionId}`);
+    await expect(page.locator("chat-view")).toBeAttached();
+
+    await page.locator("chat-view").evaluate((el) => {
+      const view = el as unknown as {
+        messages: unknown[];
+        requestUpdate: () => void;
+      };
+      view.messages = [
+        {
+          role: "assistant",
+          content: [
+            {
+              type: "toolCall",
+              id: "tc-1",
+              name: "read",
+              arguments: { path: "src/client/main.ts", offset: 1, limit: 2 },
+            },
+          ],
+          timestamp: Date.now(),
+        },
+        {
+          role: "toolResult",
+          toolCallId: "tc-1",
+          toolName: "read",
+          output: "line one\nline two",
+          timestamp: Date.now(),
+          isError: false,
+        },
+      ];
+      view.requestUpdate();
+    });
+
+    await page.waitForTimeout(200);
+
+    const collapsed = await page.locator("chat-view").evaluate((el) => {
+      const details = el.querySelector(".tool-call-details") as
+        | HTMLDetailsElement
+        | null;
+      return {
+        exists: !!details,
+        open: details?.open ?? false,
+      };
+    });
+
+    expect(collapsed.exists).toBe(true);
+    expect(collapsed.open).toBe(false);
+
+    await page.locator("chat-view").evaluate((el) => {
+      const summary = el.querySelector(".tool-call-summary") as HTMLElement;
+      summary?.click();
+    });
+
+    await page.waitForTimeout(120);
+
+    const expanded = await page.locator("chat-view").evaluate((el) => {
+      const details = el.querySelector(".tool-call-details") as
+        | HTMLDetailsElement
+        | null;
+      const body = details?.querySelector(".tool-call-body") as HTMLElement | null;
+      return {
+        open: details?.open ?? false,
+        bodyText: body?.textContent || "",
+      };
+    });
+
+    expect(expanded.open).toBe(true);
+    expect(expanded.bodyText).toContain("line one");
+  });
+
+  test("renders metadata, system prompt, and tools cards", async ({ page }) => {
+    await page.goto(`/#/session/${sessionId}`);
+    await expect(page.locator("chat-view")).toBeAttached();
+
+    await page.locator("chat-view").evaluate((el) => {
+      const view = el as unknown as {
+        systemPrompt: string;
+        requestUpdate: () => void;
+      };
+      view.systemPrompt = "You are a test prompt.\nKeep output concise.";
+      view.requestUpdate();
+    });
+
+    await page.waitForTimeout(200);
+
+    const cards = await page.locator("chat-view").evaluate((el) => {
+      return {
+        metadata: !!el.querySelector(".cv-info-card .cv-info-title"),
+        prompt: !!el.querySelector(".cv-system-prompt"),
+        tools: !!el.querySelector(".cv-tools-card"),
+      };
+    });
+
+    expect(cards.metadata).toBe(true);
+    expect(cards.prompt).toBe(true);
+    expect(cards.tools).toBe(true);
+  });
+
+  test("supports deep-link target and copy-link hash updates", async ({ page }) => {
+    await page.goto(`/#/session/${sessionId}?target=msg-1`);
+    await expect(page.locator("chat-view")).toBeAttached();
+
+    await page.locator("chat-view").evaluate((el) => {
+      const view = el as unknown as {
+        messages: unknown[];
+        requestUpdate: () => void;
+      };
+      view.messages = [
+        { role: "user", content: "first", timestamp: Date.now() - 1000 },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "second" }],
+          timestamp: Date.now(),
+        },
+      ];
+      view.requestUpdate();
+    });
+
+    await page.waitForTimeout(300);
+
+    const deepLinked = await page.locator("chat-view").evaluate((el) => {
+      const target = el.querySelector("#msg-1");
+      return {
+        exists: !!target,
+      };
+    });
+
+    expect(deepLinked.exists).toBe(true);
+
+    await page.locator("chat-view").evaluate((el) => {
+      const btn = el.querySelector("#msg-1 .copy-link-btn") as HTMLElement;
+      btn?.click();
+    });
+
+    await page.waitForTimeout(100);
+    expect(page.url()).toContain(`#/session/${sessionId}?target=msg-1`);
+  });
 });
 
 test.describe("Settings Panel", () => {
@@ -380,25 +691,127 @@ test.describe("Session Rename", () => {
   });
 });
 
+test.describe("Session Archive", () => {
+  test("can archive a session from session list context menu", async ({
+    page,
+    baseURL,
+  }) => {
+    const id = await createSession(baseURL!);
+    const name = `Archive Me ${id.slice(0, 8)}`;
+
+    await fetch(`${baseURL}/api/sessions/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    });
+
+    await page.goto("/");
+    await page.waitForTimeout(500);
+
+    await page.locator("session-list").evaluate((el, sessionName) => {
+      const items = el.shadowRoot?.querySelectorAll(".session-item");
+      for (const item of items || []) {
+        if (item.textContent?.includes(sessionName)) {
+          const btn = item.querySelector(".session-menu-btn") as HTMLElement;
+          btn?.click();
+          break;
+        }
+      }
+    }, name);
+
+    await page.locator("session-list").evaluate((el) => {
+      const archiveBtn = el.shadowRoot?.querySelector(
+        ".context-menu button",
+      ) as HTMLElement;
+      archiveBtn?.click();
+    });
+
+    await expect
+      .poll(
+        async () => {
+          const res = await fetch(`${baseURL}/api/sessions`);
+          const data = await res.json();
+          const session = data.sessions.find((s: { id: string }) => s.id === id);
+          return session?.name || "";
+        },
+        { timeout: 4000, message: "Session should be archived" },
+      )
+      .toContain("archived: ");
+
+    const archivedClassApplied = await page
+      .locator("session-list")
+      .evaluate((el, sessionName) => {
+        const items = el.shadowRoot?.querySelectorAll(".session-item") || [];
+        return Array.from(items).some(
+          (item) =>
+            item.classList.contains("archived") &&
+            item.textContent?.includes(sessionName),
+        );
+      }, name);
+
+    expect(archivedClassApplied).toBe(true);
+
+    await deleteSession(baseURL!, id);
+  });
+
+  test("sending a message unarchives archived session names", async ({
+    page,
+    baseURL,
+  }) => {
+    const id = await createSession(baseURL!);
+
+    await fetch(`${baseURL}/api/sessions/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "archived: Resume Later" }),
+    });
+
+    await page.goto(`/#/session/${id}`);
+    await expect(page.locator("chat-view")).toBeAttached();
+
+    await page.locator("chat-view").evaluate((el) => {
+      const view = el as unknown as {
+        routeAndSubmitText?: (text: string, intent: string) => void;
+      };
+      view.routeAndSubmitText?.("hello again", "send");
+    });
+
+    await expect
+      .poll(
+        async () => {
+          const res = await fetch(`${baseURL}/api/sessions`);
+          const data = await res.json();
+          const session = data.sessions.find((s: { id: string }) => s.id === id);
+          return session?.name || "";
+        },
+        { timeout: 4000, message: "Session should auto-unarchive on send" },
+      )
+      .toBe("Resume Later");
+
+    await deleteSession(baseURL!, id);
+  });
+});
+
 test.describe("Session Delete from Landing Page", () => {
   test("can delete a session via context menu", async ({ page, baseURL }) => {
     const id = await createSession(baseURL!);
+    const name = `To Delete ${id.slice(0, 8)}`;
 
     // Rename for identification
     await fetch(`${baseURL}/api/sessions/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name: "To Delete" }),
+      body: JSON.stringify({ name }),
     });
 
     await page.goto("/");
     await page.waitForTimeout(500);
 
     // Right-click the session to open context menu (session-list is shadow DOM)
-    await page.locator("session-list").evaluate((el, targetId) => {
+    await page.locator("session-list").evaluate((el, sessionName) => {
       const items = el.shadowRoot?.querySelectorAll(".session-item");
       for (const item of items || []) {
-        if (item.textContent?.includes("To Delete")) {
+        if (item.textContent?.includes(sessionName)) {
           item.dispatchEvent(
             new MouseEvent("contextmenu", {
               bubbles: true,
@@ -409,10 +822,10 @@ test.describe("Session Delete from Landing Page", () => {
           break;
         }
       }
-    }, id);
+    }, name);
 
     // Dismiss the confirm dialog automatically
-    page.on("dialog", (dialog) => dialog.accept());
+    page.once("dialog", (dialog) => dialog.accept());
 
     // Click delete in context menu
     await page.locator("session-list").evaluate((el) => {
@@ -422,14 +835,16 @@ test.describe("Session Delete from Landing Page", () => {
       deleteBtn?.click();
     });
 
-    await page.waitForTimeout(300);
-
-    // Verify via API
-    const res = await fetch(`${baseURL}/api/sessions`);
-    const data = await res.json();
-    const found = data.sessions.find(
-      (s: { id: string }) => s.id === id,
-    );
-    expect(found).toBeUndefined();
+    // Verify via API (allow async fs/write propagation)
+    await expect
+      .poll(
+        async () => {
+          const res = await fetch(`${baseURL}/api/sessions`);
+          const data = await res.json();
+          return data.sessions.some((s: { id: string }) => s.id === id);
+        },
+        { timeout: 4000, message: "Session should be deleted" },
+      )
+      .toBe(false);
   });
 });

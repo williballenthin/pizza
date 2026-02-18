@@ -3,7 +3,7 @@ import { customElement, state } from "lit/decorators.js";
 
 type Route =
   | { page: "home" }
-  | { page: "session"; id: string }
+  | { page: "session"; id: string; targetId?: string }
   | { page: "not-found"; id: string };
 
 /**
@@ -16,6 +16,10 @@ type Route =
 @customElement("app-root")
 export class AppRoot extends LitElement {
   @state() private route: Route = { page: "home" };
+
+  override createRenderRoot() {
+    return this;
+  }
 
   static styles = css`
     :host {
@@ -36,15 +40,39 @@ export class AppRoot extends LitElement {
     window.removeEventListener("hashchange", this.onHashChange);
   }
 
+  updated(changed: Map<string, unknown>) {
+    if (changed.has("route")) {
+      this.updateDocumentTitle();
+    }
+  }
+
+  private updateDocumentTitle() {
+    switch (this.route.page) {
+      case "home":
+        document.title = "pizza";
+        break;
+      case "not-found":
+        document.title = "pizza";
+        break;
+      case "session":
+        // Placeholder until chat-view loads the real session name.
+        document.title = "pizza";
+        break;
+    }
+  }
+
   private onHashChange = async () => {
     const hash = window.location.hash || "#/";
-    const sessionMatch = hash.match(/^#\/session\/(.+)$/);
+    const sessionMatch = hash.match(/^#\/session\/([^?]+)(?:\?(.*))?$/);
     if (sessionMatch) {
-      const id = sessionMatch[1];
+      const id = decodeURIComponent(sessionMatch[1]);
+      const query = new URLSearchParams(sessionMatch[2] || "");
+      const targetId = query.get("target") || undefined;
+
       // Validate session exists
       const exists = await this.sessionExists(id);
       if (exists) {
-        this.route = { page: "session", id };
+        this.route = { page: "session", id, targetId };
       } else {
         this.route = { page: "not-found", id };
       }
@@ -67,7 +95,10 @@ export class AppRoot extends LitElement {
   render() {
     switch (this.route.page) {
       case "session":
-        return html`<chat-view .sessionId=${this.route.id}></chat-view>`;
+        return html`<chat-view
+          .sessionId=${this.route.id}
+          .targetMessageId=${this.route.targetId || ""}
+        ></chat-view>`;
       case "not-found":
         return html`
           <div class="not-found">

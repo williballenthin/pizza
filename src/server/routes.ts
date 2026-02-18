@@ -1,5 +1,5 @@
 import { Router, json } from "express";
-import type { SessionManager } from "./session-manager.js";
+import { SessionBusyError, type SessionManager } from "./session-manager.js";
 
 export function createRouter(sessions: SessionManager): Router {
   const router = Router();
@@ -30,22 +30,42 @@ export function createRouter(sessions: SessionManager): Router {
 
   // Update session
   router.patch("/sessions/:id", async (req, res) => {
-    const result = await sessions.updateSession(req.params.id, req.body);
-    if (!result) {
-      res.status(404).json({ error: "Session not found" });
-      return;
+    try {
+      const result = await sessions.updateSession(req.params.id, req.body);
+      if (!result) {
+        res.status(404).json({ error: "Session not found" });
+        return;
+      }
+      res.json(result);
+    } catch (err) {
+      if (err instanceof SessionBusyError) {
+        res.status(409).json({ error: err.message });
+        return;
+      }
+      const message = err instanceof Error ? err.message : "Failed to update session";
+      console.error(`[PATCH /sessions/${req.params.id}] ${message}`);
+      res.status(500).json({ error: message });
     }
-    res.json(result);
   });
 
   // Delete session
   router.delete("/sessions/:id", async (req, res) => {
-    const ok = await sessions.deleteSession(req.params.id);
-    if (!ok) {
-      res.status(404).json({ error: "Session not found" });
-      return;
+    try {
+      const ok = await sessions.deleteSession(req.params.id);
+      if (!ok) {
+        res.status(404).json({ error: "Session not found" });
+        return;
+      }
+      res.status(204).send();
+    } catch (err) {
+      if (err instanceof SessionBusyError) {
+        res.status(409).json({ error: err.message });
+        return;
+      }
+      const message = err instanceof Error ? err.message : "Failed to delete session";
+      console.error(`[DELETE /sessions/${req.params.id}] ${message}`);
+      res.status(500).json({ error: message });
     }
-    res.status(204).send();
   });
 
   return router;

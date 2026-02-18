@@ -1,11 +1,4 @@
-// Pi-web-ui CSS (Tailwind + mini-lit theme) — must load before components
-import "@mariozechner/pi-web-ui/app.css";
-
-// NOTE: We only import pi-web-ui CSS. The JS component bundle currently
-// triggers Lit class-field shadowing errors in dev, so message rendering is
-// implemented by local components.
-
-// Our components
+// Local components + local theme.
 import "./components/app-root.js";
 import "./components/session-list.js";
 import "./components/message-list.js";
