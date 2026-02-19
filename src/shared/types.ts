@@ -15,6 +15,7 @@ export interface SessionActivity {
   warm: boolean;
   hasRecentClientActivity: boolean;
   recentlyUpdated: boolean;
+  isWorking: boolean;
 }
 
 export interface SessionMeta {

@@ -170,20 +170,36 @@ export class SessionList extends LitElement {
       flex-shrink: 0;
     }
 
-    .session-activity-badge.attached {
-      border-color: rgba(34, 197, 94, 0.55);
-      color: #16a34a;
-    }
-
-    .session-activity-badge.active_here {
-      border-color: rgba(59, 130, 246, 0.45);
-      color: #1d4ed8;
-    }
-
-    .session-activity-badge.idle,
     .session-activity-badge.warm {
       border-color: rgba(245, 158, 11, 0.5);
       color: #b45309;
+    }
+
+    .session-status-spinner {
+      width: 12px;
+      height: 12px;
+      border: 2px solid rgba(156, 163, 175, 0.5);
+      border-top-color: #ffffff;
+      border-radius: 50%;
+      flex-shrink: 0;
+      animation: spin 1s linear infinite;
+    }
+    
+    .session-status-icon {
+      font-size: 10px;
+      flex-shrink: 0;
+    }
+    
+    .session-status-icon.active {
+      color: #22c55e;
+    }
+    
+    .session-status-icon.idle {
+      color: #9ca3af;
+    }
+    
+    @keyframes spin {
+      to { transform: rotate(360deg); }
     }
 
     .session-meta {
@@ -575,6 +591,14 @@ export class SessionList extends LitElement {
                   ${archived
                     ? html`<span class="session-archived-badge">Archived</span>`
                     : nothing}
+                  ${s.activity?.isWorking
+                    ? html`<div class="session-status-spinner" title="Agent working"></div>`
+                    : nothing}
+                  ${s.activity?.attached
+                    ? html`<span class="session-status-icon active" title="Active user">●</span>`
+                    : s.activity?.activeHere
+                      ? html`<span class="session-status-icon idle" title="Process running">●</span>`
+                      : nothing}
                   ${activity
                     ? html`
                         <span class="session-activity-badge ${activity.className}">
@@ -610,14 +634,8 @@ export class SessionList extends LitElement {
     state: SessionActivityState,
   ): { label: string; className: string } | null {
     switch (state) {
-      case "attached":
-        return { label: "Attached", className: "attached" };
-      case "idle":
-        return { label: "Idle", className: "idle" };
       case "warm":
         return { label: "Warm", className: "warm" };
-      case "active_here":
-        return { label: "Active here", className: "active_here" };
       default:
         return null;
     }

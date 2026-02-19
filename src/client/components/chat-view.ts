@@ -607,11 +607,6 @@ export class ChatView extends LitElement {
 
         <div class="cv-main-col">
           <div class="cv-messages">
-            <div class="cv-shortcuts">
-              <button class="cv-shortcut-btn ${this.showThinking ? "active" : ""}" @click=${() => (this.showThinking = !this.showThinking)}>Thinking</button>
-              <button class="cv-shortcut-btn ${this.expandToolOutputs ? "active" : ""}" @click=${() => (this.expandToolOutputs = !this.expandToolOutputs)}>Tool outputs</button>
-            </div>
-
             ${renderSessionInfoStack({
               sessionId: this.sessionId,
               sessionName: this.sessionName,
@@ -688,9 +683,15 @@ export class ChatView extends LitElement {
         .open=${this.settingsOpen}
         .currentSteeringMode=${rs?.currentSteeringMode || "one-at-a-time"}
         .currentFollowUpMode=${rs?.currentFollowUpMode || "one-at-a-time"}
+        .showThinking=${this.showThinking}
+        .expandToolOutputs=${this.expandToolOutputs}
         @close=${() => (this.settingsOpen = false)}
         @steering-mode-change=${this.onSteeringModeChange}
         @follow-up-mode-change=${this.onFollowUpModeChange}
+        @show-thinking-change=${(e: CustomEvent<boolean>) =>
+          (this.showThinking = e.detail)}
+        @expand-tool-outputs-change=${(e: CustomEvent<boolean>) =>
+          (this.expandToolOutputs = e.detail)}
       ></settings-panel>
     `;
   }

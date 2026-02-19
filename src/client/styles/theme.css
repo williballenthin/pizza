@@ -493,38 +493,6 @@ chat-view {
   min-width: 70px;
 }
 
-.cv-shortcuts {
-  width: min(100%, var(--max-width));
-  margin: 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px 0 0;
-}
-
-.cv-shortcut-btn {
-  border: 1px solid var(--dim);
-  background: transparent;
-  color: var(--muted);
-  font-family: inherit;
-  font-size: 10px;
-  border-radius: 3px;
-  padding: 3px 8px;
-  cursor: pointer;
-}
-
-.cv-shortcut-btn:hover {
-  color: var(--text-primary);
-  border-color: var(--text-primary);
-}
-
-.cv-shortcut-btn.active {
-  background: var(--accent);
-  color: var(--body-bg);
-  border-color: var(--accent);
-  font-weight: 700;
-}
-
 .cv-info-stack {
   width: min(100%, var(--max-width));
   margin: 0 auto;
@@ -811,10 +779,18 @@ chat-view {
   gap: 14px;
 }
 
-.message-timestamp {
+.turn-timestamp {
   font-size: 10px;
-  color: var(--dim);
-  margin-bottom: 6px;
+  color: var(--muted);
+  text-align: center;
+  margin: 16px 0 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  opacity: 0.6;
+}
+
+.message-timestamp {
+  display: none;
 }
 
 .user-message,
@@ -888,11 +864,6 @@ chat-view {
   overflow: hidden;
 }
 
-.custom-summary-card > .message-timestamp {
-  padding: 8px 14px 0;
-  margin-bottom: 0;
-}
-
 .custom-summary-toggle {
   list-style: none;
   cursor: pointer;
@@ -952,16 +923,6 @@ chat-view {
   padding: 0 14px 10px;
 }
 
-.assistant-message > .message-timestamp {
-  padding: 0 14px;
-  margin-top: 2px;
-}
-
-.message-timestamp + .assistant-text,
-.message-timestamp + .thinking-block {
-  padding-top: 0;
-}
-
 .thinking-block {
   padding: 0 14px 10px;
 }
@@ -990,11 +951,6 @@ chat-view {
 .tool-call-details {
   padding: 0;
   overflow: hidden;
-}
-
-.tool-call-details > .message-timestamp {
-  padding: 8px 14px 0;
-  margin-bottom: 0;
 }
 
 .tool-call-summary {

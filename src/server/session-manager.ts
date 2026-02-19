@@ -17,6 +17,7 @@ interface ActiveSession {
   createdAt: string;
   idleTimer: ReturnType<typeof setTimeout> | null;
   clients: Set<(event: RpcEvent) => void>;
+  isAgentWorking: boolean;
 }
 
 interface ParsedSessionFile {
@@ -135,6 +136,7 @@ export class SessionManager {
       createdAt: new Date().toISOString(),
       idleTimer: null,
       clients: new Set(),
+      isAgentWorking: false,
     };
 
     this.bindRpcHandlers(entry);
@@ -247,6 +249,7 @@ export class SessionManager {
       createdAt: new Date().toISOString(),
       idleTimer: null,
       clients: new Set(),
+      isAgentWorking: false,
     };
 
     this.bindRpcHandlers(entry);
@@ -269,7 +272,9 @@ export class SessionManager {
     }
 
     if (entry.clients.size === 0) {
-      this.startIdleTimer(sessionId, entry);
+      if (!entry.isAgentWorking) {
+        this.startIdleTimer(sessionId, entry);
+      }
     }
   }
 
@@ -285,6 +290,19 @@ export class SessionManager {
     const sessionId = entry.sessionId;
 
     entry.rpc.on("event", (event: RpcEvent) => {
+      if (event.type === "agent_start" || event.type === "turn_start") {
+        entry.isAgentWorking = true;
+        if (entry.idleTimer) {
+          clearTimeout(entry.idleTimer);
+          entry.idleTimer = null;
+        }
+      } else if (event.type === "turn_end") {
+        entry.isAgentWorking = false;
+        if (entry.clients.size === 0) {
+          this.startIdleTimer(sessionId, entry);
+        }
+      }
+
       if (entry.clients.size > 0) {
         this.noteClientActivity(sessionId);
       }
@@ -516,6 +534,7 @@ export class SessionManager {
   ): SessionMeta["activity"] {
     const activeEntry = this.active.get(meta.id);
     const activeHere = !!activeEntry?.rpc.alive;
+    const isWorking = !!activeEntry?.isAgentWorking;
     const attached = activeHere && activeEntry.clients.size > 0;
     const hasRecentClientActivity =
       attached || this.hasRecentClientActivity(meta.id, now);
@@ -542,6 +561,7 @@ export class SessionManager {
       warm,
       hasRecentClientActivity,
       recentlyUpdated,
+      isWorking,
     };
   }
 
@@ -638,6 +658,34 @@ export class SessionManager {
       console.error(`Failed to read history for session ${sessionId}:`, e);
       return [];
     }
+  }
+
+  async addCustomMessage(
+    sessionId: string,
+    customType: string,
+    content: string,
+    details?: any,
+  ): Promise<void> {
+    const sessionFile = await this.findSessionFile(sessionId);
+    if (!sessionFile) return;
+
+    const entry = {
+      type: "custom_message",
+      id: randomHexId(),
+      parentId: null, // We don't easily know the parentId here
+      timestamp: new Date().toISOString(),
+      customType,
+      content,
+      display: true,
+      details,
+    };
+
+    await appendFile(
+      join(this.config.sessionDir, sessionFile),
+      JSON.stringify(entry) + "\n",
+    );
+
+    this.fileCache.delete(sessionFile);
   }
 
   private pruneRecentClientActivity(now: number): void {

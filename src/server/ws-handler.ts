@@ -244,15 +244,29 @@ export async function handleSessionWebSocket(
     get_state: () => {
       queuePendingCommand({ type: "get_state" }, { kind: "get_state" });
     },
-    set_model: (msg) => {
+    set_model: async (msg) => {
       rpc.send({
         type: "set_model",
         provider: msg.provider,
         modelId: msg.model,
       });
+      await sessions.addCustomMessage(
+        sessionId,
+        "model_change",
+        `Model changed to **${msg.model}** (${msg.provider})`,
+        { provider: msg.provider, modelId: msg.model },
+      );
+      queuePendingCommand({ type: "get_state" }, { kind: "get_state" });
     },
-    set_thinking_level: (msg) => {
+    set_thinking_level: async (msg) => {
       rpc.send({ type: "set_thinking_level", level: msg.level });
+      await sessions.addCustomMessage(
+        sessionId,
+        "thinking_level_change",
+        `Thinking level changed to **${msg.level}**`,
+        { level: msg.level },
+      );
+      queuePendingCommand({ type: "get_state" }, { kind: "get_state" });
     },
     set_steering_mode: (msg) => {
       rpc.send({ type: "set_steering_mode", mode: msg.mode });

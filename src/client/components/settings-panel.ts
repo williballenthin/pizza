@@ -11,6 +11,8 @@ export class SettingsPanel extends LitElement {
     "one-at-a-time";
   @property({ type: String }) currentFollowUpMode: QueueDeliveryMode =
     "one-at-a-time";
+  @property({ type: Boolean }) showThinking = true;
+  @property({ type: Boolean }) expandToolOutputs = false;
 
   @state() private theme: string =
     localStorage.getItem("pi-theme") || "auto";
@@ -198,6 +200,42 @@ export class SettingsPanel extends LitElement {
         </div>
         <div class="panel-body">
           <div class="field">
+            <label>Show Thinking</label>
+            <div class="segmented">
+              <button
+                class="seg-btn ${this.showThinking ? "active" : ""}"
+                @click=${() => this.onShowThinkingChange(true)}
+              >
+                Show
+              </button>
+              <button
+                class="seg-btn ${!this.showThinking ? "active" : ""}"
+                @click=${() => this.onShowThinkingChange(false)}
+              >
+                Hide
+              </button>
+            </div>
+          </div>
+
+          <div class="field">
+            <label>Tool Outputs</label>
+            <div class="segmented">
+              <button
+                class="seg-btn ${this.expandToolOutputs ? "active" : ""}"
+                @click=${() => this.onExpandToolOutputsChange(true)}
+              >
+                Expanded
+              </button>
+              <button
+                class="seg-btn ${!this.expandToolOutputs ? "active" : ""}"
+                @click=${() => this.onExpandToolOutputsChange(false)}
+              >
+                Collapsed
+              </button>
+            </div>
+          </div>
+
+          <div class="field">
             <label>Steering Queue</label>
             <div class="segmented">
               ${QUEUE_MODES.map(
@@ -266,6 +304,18 @@ export class SettingsPanel extends LitElement {
   private onFollowUpModeChange(mode: QueueDeliveryMode) {
     this.dispatchEvent(
       new CustomEvent("follow-up-mode-change", { detail: mode }),
+    );
+  }
+
+  private onShowThinkingChange(show: boolean) {
+    this.dispatchEvent(
+      new CustomEvent("show-thinking-change", { detail: show }),
+    );
+  }
+
+  private onExpandToolOutputsChange(expand: boolean) {
+    this.dispatchEvent(
+      new CustomEvent("expand-tool-outputs-change", { detail: expand }),
     );
   }
 

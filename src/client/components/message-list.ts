@@ -147,9 +147,10 @@ export class MessageList extends LitElement {
 
     return html`
       <div class="ml-list">
-        ${visible.map((message, index) =>
-          this.renderMessage(message, toolResults, index),
-        )}
+        ${visible.map((message, index) => {
+          const prev = index > 0 ? visible[index - 1] : null;
+          return this.renderMessage(message, toolResults, index, prev);
+        })}
       </div>
     `;
   }
@@ -158,39 +159,64 @@ export class MessageList extends LitElement {
     message: AgentMessageData,
     toolResults: Map<string, ToolResultMessage>,
     renderIndex: number,
+    previousMessage: AgentMessageData | null,
   ): TemplateResult | typeof nothing {
+    const currentTs = message.timestamp;
+    const prevTs = previousMessage?.timestamp;
+    const showTimestamp = this.shouldShowTimestamp(currentTs, prevTs);
+
+    const tsHtml = showTimestamp
+      ? html`<div class="turn-timestamp">
+          ${formatTimestamp(currentTs)}
+        </div>`
+      : nothing;
+
+    let msgHtml: TemplateResult | typeof nothing = nothing;
+
     if (message.role === "user" || message.role === "user-with-attachments") {
-      return this.renderUserMessage(message, renderIndex);
-    }
-
-    if (message.role === "assistant") {
-      return this.renderAssistantMessage(message, toolResults, renderIndex);
-    }
-
-    if (message.role === "toolResult") {
-      return this.renderOrphanToolResult(message as ToolResultMessage, renderIndex);
-    }
-
-    if (message.role === "bashExecution") {
-      return this.renderBashExecution(message as BashExecutionMessage, renderIndex);
-    }
-
-    if (message.role === "custom") {
-      return this.renderCustomMessage(message as CustomMessage, renderIndex);
-    }
-
-    if (message.role === "branchSummary") {
-      return this.renderBranchSummary(message as BranchSummaryMessage, renderIndex);
-    }
-
-    if (message.role === "compactionSummary") {
-      return this.renderCompactionSummary(
+      msgHtml = this.renderUserMessage(message, renderIndex);
+    } else if (message.role === "assistant") {
+      msgHtml = this.renderAssistantMessage(message, toolResults, renderIndex);
+    } else if (message.role === "toolResult") {
+      msgHtml = this.renderOrphanToolResult(
+        message as ToolResultMessage,
+        renderIndex,
+      );
+    } else if (message.role === "bashExecution") {
+      msgHtml = this.renderBashExecution(
+        message as BashExecutionMessage,
+        renderIndex,
+      );
+    } else if (message.role === "custom") {
+      msgHtml = this.renderCustomMessage(message as CustomMessage, renderIndex);
+    } else if (message.role === "branchSummary") {
+      msgHtml = this.renderBranchSummary(
+        message as BranchSummaryMessage,
+        renderIndex,
+      );
+    } else if (message.role === "compactionSummary") {
+      msgHtml = this.renderCompactionSummary(
         message as CompactionSummaryMessage,
         renderIndex,
       );
     }
 
-    return nothing;
+    if (msgHtml === nothing) return nothing;
+
+    return html`${tsHtml}${msgHtml}`;
+  }
+
+  private shouldShowTimestamp(currentTs: number, prevTs?: number): boolean {
+    if (!prevTs) return true;
+    const currDate = new Date(currentTs);
+    const prevDate = new Date(prevTs);
+    return (
+      currDate.getMinutes() !== prevDate.getMinutes() ||
+      currDate.getHours() !== prevDate.getHours() ||
+      currDate.getDate() !== prevDate.getDate() ||
+      currDate.getMonth() !== prevDate.getMonth() ||
+      currDate.getFullYear() !== prevDate.getFullYear()
+    );
   }
 
   private targetId(message: AgentMessageData, renderIndex: number): string {
@@ -205,7 +231,6 @@ export class MessageList extends LitElement {
     message: AgentMessageData,
     renderIndex: number,
   ): TemplateResult {
-    const ts = formatTimestamp(message.timestamp);
     const text = this.extractText(message.content).trim();
     const targetId = this.targetId(message, renderIndex);
     const images = this.asBlocks(message.content).filter(
@@ -217,8 +242,6 @@ export class MessageList extends LitElement {
 
     return html`
       <div class="user-message ml-user" id=${targetId}>
-        ${ts ? html`<div class="message-timestamp">${ts}</div>` : nothing}
-
         ${text
           ? html`<div class="markdown-content">${unsafeHTML(safeMarkedParse(text))}</div>`
           : nothing}
@@ -247,14 +270,11 @@ export class MessageList extends LitElement {
     toolResults: Map<string, ToolResultMessage>,
     renderIndex: number,
   ): TemplateResult {
-    const ts = formatTimestamp(message.timestamp);
     const blocks = this.asBlocks(message.content);
     const targetId = this.targetId(message, renderIndex);
 
     return html`
       <div class="assistant-message ml-assistant" id=${targetId}>
-        ${ts ? html`<div class="message-timestamp">${ts}</div>` : nothing}
-
         ${blocks.map((block) => {
           if (block.type === "text" && block.text?.trim()) {
             return html`<div class="assistant-text markdown-content">
@@ -290,7 +310,6 @@ export class MessageList extends LitElement {
   ): TemplateResult {
     const status = message.isError ? "error" : "success";
     const summaryStatus = message.isError ? "error" : "";
-    const ts = formatTimestamp(message.timestamp);
     const targetId = this.targetId(message, renderIndex);
 
     const output = this.getToolResultText(message).trim();
@@ -302,7 +321,6 @@ export class MessageList extends LitElement {
         id=${targetId}
         ?open=${this.expandToolOutputs}
       >
-        ${ts ? html`<div class="message-timestamp">${ts}</div>` : nothing}
         <summary class="tool-call-summary">
           <span class="tool-call-summary-main">
             <span class="tool-name">${message.toolName || "tool"}</span>
@@ -328,7 +346,6 @@ export class MessageList extends LitElement {
     message: BashExecutionMessage,
     renderIndex: number,
   ): TemplateResult {
-    const ts = formatTimestamp(message.timestamp);
     const targetId = this.targetId(message, renderIndex);
     const output = (message.output || "").trim();
     const summary = this.singleLine(output || "(no output)");
@@ -353,7 +370,6 @@ export class MessageList extends LitElement {
         id=${targetId}
         ?open=${this.expandToolOutputs}
       >
-        ${ts ? html`<div class="message-timestamp">${ts}</div>` : nothing}
         <summary class="tool-call-summary">
           <span class="tool-call-summary-main">
             <span class="tool-name">$ ${message.command || "(command)"}</span>
@@ -387,7 +403,6 @@ export class MessageList extends LitElement {
   ): TemplateResult | typeof nothing {
     if (message.display === false) return nothing;
 
-    const ts = formatTimestamp(message.timestamp);
     const targetId = this.targetId(message, renderIndex);
     const customType =
       typeof message.customType === "string" && message.customType.trim()
@@ -404,7 +419,6 @@ export class MessageList extends LitElement {
         class="custom-message hook-message ${notifyType ? `note-${notifyType}` : ""}"
         id=${targetId}
       >
-        ${ts ? html`<div class="message-timestamp">${ts}</div>` : nothing}
         <div class="custom-message-label">${customType}</div>
         ${text
           ? html`<div class="markdown-content">${unsafeHTML(safeMarkedParse(text))}</div>`
@@ -417,7 +431,6 @@ export class MessageList extends LitElement {
     message: BranchSummaryMessage,
     renderIndex: number,
   ): TemplateResult {
-    const ts = formatTimestamp(message.timestamp);
     const targetId = this.targetId(message, renderIndex);
     const summary =
       typeof message.summary === "string" && message.summary.trim()
@@ -430,7 +443,6 @@ export class MessageList extends LitElement {
         id=${targetId}
         ?open=${this.expandToolOutputs}
       >
-        ${ts ? html`<div class="message-timestamp">${ts}</div>` : nothing}
         <summary class="custom-summary-toggle">
           <span class="custom-message-label">branch</span>
           <span class="custom-message-summary">Branch summary</span>
@@ -446,7 +458,6 @@ export class MessageList extends LitElement {
     message: CompactionSummaryMessage,
     renderIndex: number,
   ): TemplateResult {
-    const ts = formatTimestamp(message.timestamp);
     const targetId = this.targetId(message, renderIndex);
     const summary =
       typeof message.summary === "string" && message.summary.trim()
@@ -463,7 +474,6 @@ export class MessageList extends LitElement {
         id=${targetId}
         ?open=${this.expandToolOutputs}
       >
-        ${ts ? html`<div class="message-timestamp">${ts}</div>` : nothing}
         <summary class="custom-summary-toggle">
           <span class="custom-message-label">compaction</span>
           <span class="custom-message-summary"
