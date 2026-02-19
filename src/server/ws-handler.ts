@@ -10,6 +10,7 @@ import type {
   SlashCommandSpec,
   ImageContent,
   AgentMessageData,
+  SessionMessageStats,
 } from "@shared/types.js";
 
 type PendingCommand =
@@ -409,10 +410,17 @@ function handlePendingRpcResponse(
         isStreaming: (data?.isStreaming as boolean) || false,
         autoCompactionEnabled: data?.autoCompactionEnabled === true,
         messages: [],
-        messageCount:
-          typeof data?.messageCount === "number"
-            ? (data.messageCount as number)
-            : undefined,
+        messageStats:
+          data?.messageStats && typeof data.messageStats === "object"
+            ? (data.messageStats as SessionMessageStats)
+            : typeof data?.messageCount === "number"
+              ? {
+                  userMessages: 0,
+                  assistantMessages: 0,
+                  toolCalls: 0,
+                  totalMessages: data.messageCount as number,
+                }
+              : undefined,
         pendingMessageCount:
           typeof data?.pendingMessageCount === "number"
             ? (data.pendingMessageCount as number)
