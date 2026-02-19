@@ -7,11 +7,20 @@ export interface SessionInfo {
   createdAt: string;
   lastActivityAt: string;
   messageStats: SessionMessageStats;
+  cwd?: string;
 }
 
 export interface RuntimeInfo {
+  sessionsRoot: string;
+}
+
+export interface ProjectInfo {
   cwd: string;
-  gitBranch: string;
+  encodedCwd: string;
+  sessionDir: string;
+  sessionCount: number;
+  lastActivityAt: string;
+  displayPath: string;
 }
 
 export async function fetchSessionInfo(sessionId: string): Promise<SessionInfo | null> {
@@ -27,6 +36,7 @@ export async function fetchSessionInfo(sessionId: string): Promise<SessionInfo |
       createdAt: session.createdAt || "",
       lastActivityAt: session.lastActivityAt || "",
       messageStats: session.messageStats || emptyMessageStats(),
+      cwd: typeof session.cwd === "string" ? session.cwd : undefined,
     };
   } catch {
     return null;
@@ -39,11 +49,21 @@ export async function fetchRuntimeInfo(): Promise<RuntimeInfo | null> {
     if (!res.ok) return null;
     const data = await res.json();
     return {
-      cwd: typeof data.cwd === "string" ? data.cwd : "",
-      gitBranch: typeof data.gitBranch === "string" ? data.gitBranch : "",
+      sessionsRoot: typeof data.sessionsRoot === "string" ? data.sessionsRoot : "",
     };
   } catch {
     return null;
+  }
+}
+
+export async function fetchProjects(): Promise<ProjectInfo[]> {
+  try {
+    const res = await fetch("/api/projects");
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.projects || [];
+  } catch {
+    return [];
   }
 }
 

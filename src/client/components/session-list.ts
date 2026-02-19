@@ -540,7 +540,7 @@ export class SessionList extends LitElement {
   render() {
     return html`
       <header>
-        <h1>Pi Web UI</h1>
+        <h1>🍕</h1>
         <button class="new-btn" @click=${this.createSession}>
           <span class="plus">+</span>
           <span>New session</span>
@@ -624,6 +624,7 @@ export class SessionList extends LitElement {
       s.model || "unknown model",
       relativeTime(s.lastActivityAt),
     ];
+    if (s.cwd) metaParts.push(s.cwd);
 
     return html`
       <a

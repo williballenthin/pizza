@@ -30,7 +30,6 @@ import {
 } from "../utils/message-shaping.js";
 import {
   fetchSessionInfo,
-  fetchRuntimeInfo,
   patchSessionName,
   unarchiveSessionIfNeeded,
 } from "../utils/session-actions.js";
@@ -90,7 +89,6 @@ export class ChatView extends LitElement {
   @state() private sessionCreatedAt = "";
   @state() private sessionLastActivityAt = "";
   @state() private hostCwd = "";
-  @state() private hostGitBranch = "";
   @state() private persistedMessageStats: SessionMessageStats = emptyMessageStats();
 
   @state() private extensionUiRequest: ExtensionUIRequest | null = null;
@@ -182,7 +180,6 @@ export class ChatView extends LitElement {
     );
     this.runtime.connect();
     this.loadSessionName();
-    this.loadRuntimeInfo();
     this.focusChatInput();
   }
 
@@ -195,7 +192,6 @@ export class ChatView extends LitElement {
     this.sessionCreatedAt = "";
     this.sessionLastActivityAt = "";
     this.hostCwd = "";
-    this.hostGitBranch = "";
     this.persistedMessageStats = emptyMessageStats();
   }
 
@@ -397,15 +393,8 @@ export class ChatView extends LitElement {
       this.sessionCreatedAt = info.createdAt;
       this.sessionLastActivityAt = info.lastActivityAt;
       this.persistedMessageStats = info.messageStats;
+      if (info.cwd) this.hostCwd = info.cwd;
       this.updateDocumentTitle();
-    }
-  }
-
-  private async loadRuntimeInfo() {
-    const info = await fetchRuntimeInfo();
-    if (info) {
-      this.hostCwd = info.cwd;
-      this.hostGitBranch = info.gitBranch;
     }
   }
 
@@ -729,7 +718,7 @@ export class ChatView extends LitElement {
           ${renderChatEditorFooter({
             usage: usageTotals,
             hostCwd: this.hostCwd,
-            hostGitBranch: this.hostGitBranch,
+            hostGitBranch: "",
             reconnecting,
             connected,
             isStreaming,
