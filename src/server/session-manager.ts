@@ -3,11 +3,13 @@ import { join } from "path";
 import { RpcProcess } from "./rpc-process.js";
 import type {
   SessionMeta,
+  SessionMessageStats,
   SessionActivityUpdate,
   RpcEvent,
   SessionActivityState,
   AgentMessageData,
 } from "@shared/types.js";
+import { countMessageStats, emptyMessageStats, type JsonlMessageEntry } from "@shared/session-stats.js";
 import type { ServerConfig } from "./config.js";
 
 interface ActiveSession {
@@ -27,7 +29,7 @@ interface ParsedSessionFile {
   createdAt: string;
   name: string | undefined;
   lastActivityAt: string;
-  messageCount: number;
+  messageStats: SessionMessageStats;
   model: string | undefined;
 }
 
@@ -74,7 +76,7 @@ export class SessionManager {
             name: parsed.name || fallbackName(parsed.id),
             createdAt: parsed.createdAt,
             lastActivityAt: parsed.lastActivityAt,
-            messageCount: parsed.messageCount,
+            messageStats: parsed.messageStats,
             model: parsed.model,
           },
           now,
@@ -97,7 +99,7 @@ export class SessionManager {
               name: entry.name || "New Session",
               createdAt: entry.createdAt,
               lastActivityAt: entry.createdAt,
-              messageCount: 0,
+              messageStats: emptyMessageStats(),
             },
             now,
           ),
@@ -447,7 +449,7 @@ export class SessionManager {
 
     let name: string | undefined;
     let lastTimestamp = header.timestamp || new Date().toISOString();
-    let messageCount = 0;
+    const messageEntries: JsonlMessageEntry[] = [];
     let firstUserMessage: string | undefined;
     let model: string | undefined;
 
@@ -476,7 +478,12 @@ export class SessionManager {
         if (parsedLine.type === "session_info" && parsedLine.name) {
           name = parsedLine.name;
         } else if (parsedLine.type === "message") {
-          messageCount++;
+          if (parsedLine.message) {
+            messageEntries.push({
+              role: parsedLine.message.role || "",
+              content: parsedLine.message.content,
+            });
+          }
           if (!firstUserMessage && parsedLine.message?.role === "user") {
             const text =
               typeof parsedLine.message.content === "string"
@@ -506,7 +513,7 @@ export class SessionManager {
       createdAt: header.timestamp || new Date().toISOString(),
       name,
       lastActivityAt: lastTimestamp,
-      messageCount,
+      messageStats: countMessageStats(messageEntries),
       model,
     };
 
