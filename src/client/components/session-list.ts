@@ -25,7 +25,17 @@ export class SessionList extends LitElement {
       display: flex;
       flex-direction: column;
       height: 100%;
+      width: 100%;
+      min-width: 0;
+      overflow: hidden;
       background: var(--bg);
+      line-height: 1.5;
+    }
+
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
     }
 
     header {
@@ -83,6 +93,7 @@ export class SessionList extends LitElement {
     .list {
       flex: 1;
       overflow-y: auto;
+      overflow-x: hidden;
       padding: 0;
     }
 
@@ -461,6 +472,33 @@ export class SessionList extends LitElement {
       font-size: 12px;
       color: var(--muted);
       opacity: 0.6;
+    }
+
+    @media (max-width: 980px) {
+      .project-picker {
+        top: 44px;
+        right: 8px;
+        left: 8px;
+        min-width: 0;
+        max-width: none;
+      }
+
+      .project-item-path,
+      .project-row-path {
+        overflow-wrap: anywhere;
+        word-break: break-word;
+      }
+    }
+
+    @media (max-width: 980px) and (pointer: coarse) {
+      :host .project-cwd-input {
+        font-size: 16px;
+      }
+    }
+
+    :host,
+    :host * {
+      font-size: var(--ui-font-size, 12px);
     }
   `;
 

@@ -133,11 +133,14 @@ body {
 
 body {
   overflow: hidden;
+  overscroll-behavior: none;
 }
 
 app-root {
   display: block;
   height: 100%;
+  width: 100%;
+  overflow: hidden;
 }
 
 a {
@@ -164,6 +167,10 @@ chat-view {
   display: flex;
   flex-direction: column;
   height: 100%;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
   background: var(--bg);
 }
 
@@ -264,7 +271,10 @@ chat-view {
   display: grid;
   grid-template-columns: 400px minmax(0, 1fr);
   flex: 1;
+  min-width: 0;
   min-height: 0;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .cv-sidebar {
@@ -444,7 +454,11 @@ chat-view {
   position: relative;
   display: flex;
   flex-direction: column;
+  width: 100%;
+  min-width: 0;
   min-height: 0;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .cv-editor-widget-stack {
@@ -829,14 +843,18 @@ chat-view {
 
 .cv-messages {
   flex: 1;
+  width: 100%;
+  min-width: 0;
   min-height: 0;
   overflow-y: auto;
+  overflow-x: hidden;
   padding: 12px 14px 18px;
   scroll-behavior: auto;
 }
 
 .ml-list {
   width: 100%;
+  min-width: 0;
   max-width: var(--max-width);
   margin: 0 auto;
   display: flex;
@@ -1465,8 +1483,43 @@ chat-view {
     display: none;
   }
 
+  .cv-messages {
+    padding-left: 10px;
+    padding-right: 10px;
+  }
+
   .cv-info-grid {
     grid-template-columns: 1fr;
+  }
+
+  .cv-info-item {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .cv-info-item strong {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+
+  .tool-call-summary-main,
+  .cv-tool-item summary,
+  .custom-summary-toggle {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .tool-call-summary-text,
+  .tool-path,
+  .tool-command {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: clip;
+    overflow-wrap: anywhere;
+    word-break: break-word;
   }
 
   .cv-editor-status-row {
@@ -1482,5 +1535,13 @@ chat-view {
   .cv-editor-status-left,
   .cv-editor-status-right {
     white-space: normal;
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+}
+
+@media (max-width: 980px) and (pointer: coarse) {
+  .cv-info-title-input {
+    font-size: 16px;
   }
 }

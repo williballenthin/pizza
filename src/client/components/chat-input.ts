@@ -33,11 +33,20 @@ export class ChatInput extends LitElement {
     :host {
       display: block;
       flex-shrink: 0;
+      width: 100%;
+      min-width: 0;
+      overflow: hidden;
       border-top: 1px solid var(--borderSubtle, var(--borderMuted, #505050));
       border-bottom: 1px solid var(--borderSubtle, var(--borderMuted, #505050));
       background: var(--surface);
       font-family: var(--font, ui-monospace, monospace);
       position: relative;
+    }
+
+    *,
+    *::before,
+    *::after {
+      box-sizing: border-box;
     }
 
     :host(:focus-within) {
@@ -50,6 +59,7 @@ export class ChatInput extends LitElement {
       align-items: flex-end;
       gap: 8px;
       width: 100%;
+      min-width: 0;
       padding: 10px 14px;
       padding-bottom: max(10px, env(safe-area-inset-bottom));
       position: relative;
@@ -131,6 +141,7 @@ export class ChatInput extends LitElement {
       max-height: 180px;
       resize: none;
       overflow-y: auto;
+      overflow-x: hidden;
       border: none;
       border-radius: 0;
       padding: 8px 0;
@@ -139,7 +150,22 @@ export class ChatInput extends LitElement {
       font-family: inherit;
       font-size: 14px;
       line-height: 1.45;
+      overflow-wrap: anywhere;
+      word-break: break-word;
       outline: none;
+    }
+
+    @media (max-width: 980px) and (pointer: coarse) {
+      textarea {
+        font-size: 16px;
+        min-height: 36px;
+        max-height: 180px;
+      }
+
+      textarea:focus {
+        min-height: 50vh;
+        max-height: 50vh;
+      }
     }
 
     textarea::placeholder {
@@ -310,6 +336,17 @@ export class ChatInput extends LitElement {
         height: 32px;
         font-size: 12px;
         background: var(--surface-alt);
+      }
+    }
+
+    :host,
+    :host * {
+      font-size: var(--ui-font-size, 12px);
+    }
+
+    @media (max-width: 980px) and (pointer: coarse) {
+      :host textarea {
+        font-size: 16px;
       }
     }
   `;
