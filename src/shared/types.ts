@@ -23,12 +23,19 @@ export interface SessionActivityUpdate {
   activity: SessionActivity;
 }
 
+export interface SessionMessageStats {
+  userMessages: number;
+  assistantMessages: number;
+  toolCalls: number;
+  totalMessages: number;
+}
+
 export interface SessionMeta {
   id: string;
   name: string;
   createdAt: string; // ISO 8601
   lastActivityAt: string; // ISO 8601
-  messageCount: number;
+  messageStats: SessionMessageStats;
   model?: string;
   activity: SessionActivity;
 }
@@ -88,7 +95,7 @@ export interface StateMessage {
   isStreaming: boolean;
   autoCompactionEnabled?: boolean;
   messages: AgentMessageData[];
-  messageCount?: number;
+  messageStats?: SessionMessageStats;
   pendingMessageCount?: number;
   systemPrompt?: string;
   tools?: ToolSpec[];
