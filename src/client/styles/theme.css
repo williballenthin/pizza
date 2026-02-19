@@ -1181,11 +1181,13 @@ chat-view {
   display: none;
 }
 
-.tool-output.expandable.expanded .output-preview {
+.tool-output.expandable.expanded .output-preview,
+.ml-list.expand-all .tool-output.expandable .output-preview {
   display: none;
 }
 
-.tool-output.expandable.expanded .output-full {
+.tool-output.expandable.expanded .output-full,
+.ml-list.expand-all .tool-output.expandable .output-full {
   display: block;
 }
 

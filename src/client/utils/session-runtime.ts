@@ -17,7 +17,8 @@ import { extractPromptText } from "./message-shaping.js";
 import { ExtensionUiState } from "./extension-ui-state.js";
 
 export interface SessionRuntimeState {
-  messages: AgentMessageData[];
+  baseMessages: AgentMessageData[];
+  streamingTail: AgentMessageData[];
   isStreaming: boolean;
   currentModel: string;
   currentProvider: string;
@@ -44,7 +45,6 @@ export interface SessionRuntimeState {
 
 export type SessionRuntimeListener = (state: SessionRuntimeState) => void;
 
-// Local content blocks for streaming
 interface TextBlock { type: "text"; text: string; }
 interface ThinkingBlock { type: "thinking"; thinking: string; }
 interface ToolCallBlock { type: "toolCall"; id: string; name: string; arguments: Record<string, unknown>; }
@@ -65,7 +65,8 @@ export class SessionRuntime {
   public extensionUiState: ExtensionUiState;
 
   private state: SessionRuntimeState = {
-    messages: [],
+    baseMessages: [],
+    streamingTail: [],
     isStreaming: false,
     currentModel: "",
     currentProvider: "",
@@ -94,7 +95,6 @@ export class SessionRuntime {
   private partialToolResults = new Map<string, AgentMessageData>();
   private streamMsg: PartialAssistantMessage | null = null;
   private streamUpdatePending = false;
-  private baseMessages: AgentMessageData[] = [];
 
   constructor(sessionId: string, extensionUiState: ExtensionUiState, listener: SessionRuntimeListener) {
     this.sessionId = sessionId;
@@ -218,9 +218,9 @@ export class SessionRuntime {
       tools: msg.tools || [],
     };
 
-    if (incomingMessages.length > 0 || this.state.messages.length === 0) {
-      patch.messages = incomingMessages;
-      this.baseMessages = incomingMessages;
+    if (incomingMessages.length > 0 || this.state.baseMessages.length === 0) {
+      patch.baseMessages = incomingMessages;
+      patch.streamingTail = [];
     }
 
     if (msg.model) {
@@ -253,52 +253,51 @@ export class SessionRuntime {
   }
 
   private handleAgentEvent(event: RpcEvent) {
-    const handlers: Record<string, (e: any) => void> = {
-      agent_start: () => {
+    switch (event.type) {
+      case "agent_start":
         this.updateState({ isStreaming: true, wasInterrupted: false });
-      },
-      agent_end: () => {
+        break;
+      case "agent_end":
         this.finalizeStreaming();
         this.updateState({ isStreaming: false });
-      },
-      message_start: () => {
+        break;
+      case "message_start":
         this.streamMsg = { role: "assistant", content: [], timestamp: Date.now() };
-      },
-      message_update: (e) => this.handleAgentMessageUpdate(e),
-      message_end: () => {
+        break;
+      case "message_update":
+        this.handleAgentMessageUpdate(event);
+        break;
+      case "message_end":
         this.finalizeStreaming();
-      },
-      tool_execution_start: (e) => {
-        if (e.toolCallId) this.pendingToolCalls.add(e.toolCallId);
-      },
-      tool_execution_update: (e) => this.handleToolExecutionUpdate(e),
-      tool_execution_end: (e) => {
-        if (e.toolCallId) {
-          this.pendingToolCalls.delete(e.toolCallId);
-          this.partialToolResults.delete(e.toolCallId);
+        break;
+      case "tool_execution_start":
+        if ((event as any).toolCallId) this.pendingToolCalls.add((event as any).toolCallId);
+        break;
+      case "tool_execution_update":
+        this.handleToolExecutionUpdate(event);
+        break;
+      case "tool_execution_end":
+        if ((event as any).toolCallId) {
+          this.pendingToolCalls.delete((event as any).toolCallId);
+          this.partialToolResults.delete((event as any).toolCallId);
         }
-      },
-      auto_compaction_start: () => {
+        break;
+      case "auto_compaction_start":
         this.appendInlineNotification("Auto-compacting context...", "warning");
-      },
-      auto_compaction_end: (e) => {
-        if (e.aborted) this.appendInlineNotification("Auto-compaction cancelled.", "warning");
-        else if (e.errorMessage) this.appendInlineNotification(e.errorMessage, "error");
-      },
-      response: (e) => this.handleAgentResponse(e),
-      extension_ui_request: (e) => {
-        this.extensionUiState.handleRequest(e as ExtensionUIRequest);
-        // Side effects like setTitle/notify should be handled by the listener observing extensionUiState
-        // But here we rely on the chat-view's syncExtensionUiState which it calls in its listener.
-      },
-      turn_end: () => {
+        break;
+      case "auto_compaction_end":
+        if ((event as any).aborted) this.appendInlineNotification("Auto-compaction cancelled.", "warning");
+        else if ((event as any).errorMessage) this.appendInlineNotification((event as any).errorMessage, "error");
+        break;
+      case "response":
+        this.handleAgentResponse(event);
+        break;
+      case "extension_ui_request":
+        this.extensionUiState.handleRequest(event as unknown as ExtensionUIRequest);
+        break;
+      case "turn_end":
         this.send({ type: "get_state" });
-      },
-    };
-
-    const handler = handlers[event.type];
-    if (handler) {
-      handler(event);
+        break;
     }
   }
 
@@ -368,9 +367,8 @@ export class SessionRuntime {
     if (this.streamMsg && this.streamMsg.content.length > 0) {
       this.partialToolResults.clear();
       const assistantMsg = { ...this.streamMsg } as AgentMessageData;
-      const messages = [...this.baseMessages, assistantMsg];
-      this.baseMessages = messages;
-      this.updateState({ messages });
+      const baseMessages = [...this.state.baseMessages, assistantMsg];
+      this.updateState({ baseMessages, streamingTail: [] });
       this.streamMsg = null;
     }
   }
@@ -380,8 +378,8 @@ export class SessionRuntime {
     this.streamUpdatePending = true;
     requestAnimationFrame(() => {
       this.streamUpdatePending = false;
-      const merged = this.getMergedMessages();
-      const patch: Partial<SessionRuntimeState> = { messages: merged };
+      const tail = this.buildStreamingTail();
+      const patch: Partial<SessionRuntimeState> = { streamingTail: tail };
       if (!setsEqual(this.state.pendingToolCalls, this.pendingToolCalls)) {
         patch.pendingToolCalls = new Set(this.pendingToolCalls);
       }
@@ -389,17 +387,17 @@ export class SessionRuntime {
     });
   }
 
-  private getMergedMessages(): AgentMessageData[] {
+  private buildStreamingTail(): AgentMessageData[] {
     const results = Array.from(this.partialToolResults.values());
-    const merged: AgentMessageData[] = [...this.baseMessages, ...results];
+    const tail: AgentMessageData[] = [...results];
     if (this.streamMsg) {
-      merged.push({
+      tail.push({
         ...this.streamMsg,
         content: [...this.streamMsg.content],
         _streamingId: "__streaming__",
       } as AgentMessageData);
     }
-    return merged;
+    return tail;
   }
 
   private handleAgentResponse(event: any) {
@@ -407,12 +405,11 @@ export class SessionRuntime {
     this.partialToolResults.clear();
     this.pendingToolCalls.clear();
 
-    const patch: Partial<SessionRuntimeState> = { isStreaming: false };
+    const patch: Partial<SessionRuntimeState> = { isStreaming: false, streamingTail: [] };
     if (event.data?.messages) {
-      patch.messages = event.data.messages;
-      this.baseMessages = event.data.messages;
+      patch.baseMessages = event.data.messages;
       if (event.data.systemPrompt) patch.systemPrompt = event.data.systemPrompt;
-      else patch.systemPrompt = this.deriveSystemPrompt(patch.messages!);
+      else patch.systemPrompt = this.deriveSystemPrompt(patch.baseMessages!);
     }
     if (event.data?.wasInterrupted) {
       patch.wasInterrupted = true;
@@ -434,9 +431,8 @@ export class SessionRuntime {
       timestamp: result.timestamp,
     };
 
-    this.updateState({
-      messages: [...this.state.messages, shellMessage],
-    });
+    const baseMessages = [...this.state.baseMessages, shellMessage];
+    this.updateState({ baseMessages });
   }
 
   private appendInlineNotification(text: string, notifyType: "info" | "warning" | "error") {
@@ -448,9 +444,8 @@ export class SessionRuntime {
       details: { notifyType },
       timestamp: Date.now(),
     };
-    this.updateState({
-      messages: [...this.state.messages, noteMessage]
-    });
+    const baseMessages = [...this.state.baseMessages, noteMessage];
+    this.updateState({ baseMessages });
   }
 
   public appendUserMessage(text: string, images: ImageContent[] = []) {
@@ -466,8 +461,9 @@ export class SessionRuntime {
       content,
       timestamp: Date.now(),
     };
+    const baseMessages = [...this.state.baseMessages, userMsg];
     this.updateState({
-      messages: [...this.state.messages, userMsg],
+      baseMessages,
       wasInterrupted: false,
     });
   }

@@ -91,10 +91,6 @@ export class MessageList extends LitElement {
         const details = node as HTMLDetailsElement;
         details.open = this.expandToolOutputs;
       });
-
-      this.querySelectorAll(".tool-output.expandable").forEach((node) => {
-        node.classList.toggle("expanded", this.expandToolOutputs);
-      });
     }
   }
 
@@ -134,7 +130,7 @@ export class MessageList extends LitElement {
     const toolResults = this._toolResults;
 
     return html`
-      <div class="ml-list">
+      <div class="ml-list${this.expandToolOutputs ? " expand-all" : ""}">
         ${repeat(
           this.messages,
           (message) => this.stableKey(message),
@@ -516,9 +512,10 @@ export class MessageList extends LitElement {
     const name = block.name || "tool";
 
     const pending = id ? this.pendingToolCalls.has(id) : false;
+    const resultText = result ? this.getToolResultText(result) : "";
+    const resultTextTrimmed = resultText.trim();
 
     if (id && result && !pending) {
-      const resultText = this.getToolResultText(result);
       const cacheKey = `${id}\0${resultText.length}\0${result.isError}`;
       const cached = this.toolCallHtmlCache.get(cacheKey);
       if (cached) return cached;
@@ -544,10 +541,9 @@ export class MessageList extends LitElement {
         body += `<div class="tool-section"><div class="tool-section-label">Input</div><div class="tool-command">$ ${cmdDisplay}</div></div>`;
 
         if (result) {
-          const output = this.getToolResultText(result).trim();
           body += `<div class="tool-section"><div class="tool-section-label">Output</div>${
-            output
-              ? formatExpandableOutput(output, 8)
+            resultTextTrimmed
+              ? formatExpandableOutput(resultTextTrimmed, 8)
               : '<div class="tool-output"><div>(no output)</div></div>'
           }</div>`;
         }
@@ -571,12 +567,11 @@ export class MessageList extends LitElement {
         body += `<div class="tool-section"><div class="tool-section-label">Input</div><div class="tool-header"><span class="tool-name">read</span> <span class="tool-path">${pathHtml}</span></div></div>`;
 
         if (result) {
-          const output = this.getToolResultText(result);
           const lang = filePath ? getLanguageFromPath(filePath) : undefined;
           const images = this.renderResultImages(result.content);
           body += `<div class="tool-section"><div class="tool-section-label">Output</div>${images}${
-            output.trim()
-              ? formatExpandableOutput(output, 12, lang)
+            resultTextTrimmed
+              ? formatExpandableOutput(resultText, 12, lang)
               : '<div class="tool-output"><div>(no output)</div></div>'
           }</div>`;
         }
@@ -600,10 +595,9 @@ export class MessageList extends LitElement {
         }
 
         if (result) {
-          const output = this.getToolResultText(result).trim();
           body += `<div class="tool-section"><div class="tool-section-label">Output</div>${
-            output
-              ? formatExpandableOutput(output, 10)
+            resultTextTrimmed
+              ? formatExpandableOutput(resultTextTrimmed, 10)
               : '<div class="tool-output"><div>(no output)</div></div>'
           }</div>`;
         }
@@ -629,20 +623,19 @@ export class MessageList extends LitElement {
         }
 
         if (result) {
-          const output = this.getToolResultText(result).trim();
           const diff =
             typeof result.details?.diff === "string" && result.details.diff
               ? result.details.diff
-              : this.looksLikeDiff(output)
-                ? output
+              : this.looksLikeDiff(resultTextTrimmed)
+                ? resultTextTrimmed
                 : "";
 
           if (diff) {
             body += `<div class="tool-section"><div class="tool-section-label">Diff</div>${this.renderDiff(diff)}</div>`;
           } else {
             body += `<div class="tool-section"><div class="tool-section-label">Output</div>${
-              output
-                ? formatExpandableOutput(output, 10)
+              resultTextTrimmed
+                ? formatExpandableOutput(resultTextTrimmed, 10)
                 : '<div class="tool-output"><div>(no output)</div></div>'
             }</div>`;
           }
@@ -687,20 +680,18 @@ export class MessageList extends LitElement {
               body += `<div class="tool-section"><div class="tool-section-label">Output</div><div class="tool-output ansi-rendered">${renderedResult}</div></div>`;
             }
           } else if (result) {
-            const output = this.getToolResultText(result).trim();
             body += `<div class="tool-section"><div class="tool-section-label">Output</div>${
-              output
-                ? formatExpandableOutput(output, 10)
+              resultTextTrimmed
+                ? formatExpandableOutput(resultTextTrimmed, 10)
                 : '<div class="tool-output"><div>(no output)</div></div>'
             }</div>`;
           }
         } else {
           body += `<div class="tool-section"><div class="tool-section-label">Input</div><div class="tool-output"><pre>${argsJson}</pre></div></div>`;
           if (result) {
-            const output = this.getToolResultText(result).trim();
             body += `<div class="tool-section"><div class="tool-section-label">Output</div>${
-              output
-                ? formatExpandableOutput(output, 10)
+              resultTextTrimmed
+                ? formatExpandableOutput(resultTextTrimmed, 10)
                 : '<div class="tool-output"><div>(no output)</div></div>'
             }</div>`;
           }
@@ -728,7 +719,6 @@ export class MessageList extends LitElement {
     </details>`;
 
     if (id && result && !pending) {
-      const resultText = this.getToolResultText(result);
       const cacheKey = `${id}\0${resultText.length}\0${result.isError}`;
       this.toolCallHtmlCache.set(cacheKey, html);
     }

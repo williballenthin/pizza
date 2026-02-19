@@ -8,8 +8,6 @@ import type {
   ExtensionUIRequest,
   ImageContent,
   SessionMessageStats,
-  SessionMeta,
-  SessionActivityUpdate,
 } from "@shared/types.js";
 import { emptyMessageStats } from "@shared/session-stats.js";
 import {
@@ -34,8 +32,6 @@ import {
   unarchiveSessionIfNeeded,
 } from "../utils/session-actions.js";
 import { renderExtensionUiDialog } from "../utils/render-extension-ui-dialog.js";
-import { renderChatSidebar, type ActiveSessionItem } from "../utils/render-chat-sidebar.js";
-import { isArchivedSessionName, unarchiveSessionName } from "@shared/session-archive.js";
 import { renderSessionInfoStack } from "../utils/render-session-info-stack.js";
 import {
   renderChatEditorFooter,
@@ -47,6 +43,8 @@ import {
   SessionRuntime,
   type SessionRuntimeState,
 } from "../utils/session-runtime.js";
+
+import "./session-sidebar.js";
 
 interface SessionStats {
   userMessages: number;
@@ -67,6 +65,8 @@ const THINKING_LEVELS: ThinkingLevel[] = [
   "high",
   "xhigh",
 ];
+
+const EMPTY_SET = new Set<string>();
 
 @customElement("chat-view")
 export class ChatView extends LitElement {
@@ -96,17 +96,13 @@ export class ChatView extends LitElement {
   @state() private extensionStatuses: ExtensionStatusEntry[] = [];
   @state() private extensionWidgets: ExtensionWidgetEntry[] = [];
 
-  @state() private otherSessions: SessionMeta[] = [];
-
   private extensionUiState = new ExtensionUiState();
   private runtime: SessionRuntime | null = null;
   private scrollContainer: HTMLElement | null = null;
   private shouldAutoScroll = true;
   private pendingDeepLinkTarget = "";
-  private sessionsEventSource: EventSource | null = null;
-  private sessionsSSEHasConnected = false;
 
-  private _lastMessages: AgentMessageData[] | null = null;
+  private _lastBaseMessages: AgentMessageData[] | null = null;
   private _cachedRenderable: AgentMessageData[] = [];
   private _cachedStats: SessionStats = { userMessages: 0, assistantMessages: 0, toolCalls: 0 };
   private _cachedKnownTools: ToolSpec[] = [];
@@ -117,22 +113,17 @@ export class ChatView extends LitElement {
   private _lastSidebarFilter: SidebarFilterMode = "no-tools";
   private _cachedSidebarEntries: SidebarEntry[] = [];
 
-  // ---- Lifecycle ----
-
   connectedCallback() {
     super.connectedCallback();
     this.updateDocumentTitle();
     this.pendingDeepLinkTarget = this.targetMessageId || "";
     this.bootstrapSessionRuntime();
-    this.loadOtherSessions();
-    this.connectSessionsSSE();
     window.addEventListener("keydown", this.onKeydown);
   }
 
   disconnectedCallback() {
     super.disconnectedCallback();
     this.cleanup();
-    this.disconnectSessionsSSE();
     window.removeEventListener("keydown", this.onKeydown);
   }
 
@@ -158,7 +149,10 @@ export class ChatView extends LitElement {
       this.scrollContainer?.addEventListener("scroll", this.onScroll);
     }
 
-    if (this.pendingDeepLinkTarget && this.runtimeState?.messages.length) {
+    const allMessages = this.runtimeState
+      ? [...this.runtimeState.baseMessages, ...this.runtimeState.streamingTail]
+      : [];
+    if (this.pendingDeepLinkTarget && allMessages.length) {
       this.tryApplyDeepLinkTarget(this.pendingDeepLinkTarget);
     }
   }
@@ -206,69 +200,6 @@ export class ChatView extends LitElement {
     this.persistedMessageStats = emptyMessageStats();
   }
 
-  // ---- Other sessions (sidebar quick-links) ----
-
-  private async loadOtherSessions() {
-    try {
-      const res = await fetch("/api/sessions");
-      if (!res.ok) return;
-      const data = await res.json();
-      this.otherSessions = data.sessions;
-    } catch {
-      // silent — supplementary UI
-    }
-  }
-
-  private connectSessionsSSE() {
-    this.sessionsEventSource = new EventSource("/api/sessions/events");
-    this.sessionsSSEHasConnected = false;
-
-    this.sessionsEventSource.onopen = () => {
-      if (this.sessionsSSEHasConnected) {
-        this.loadOtherSessions();
-      }
-      this.sessionsSSEHasConnected = true;
-    };
-
-    this.sessionsEventSource.onmessage = (e) => {
-      const update: SessionActivityUpdate = JSON.parse(e.data);
-      const session = this.otherSessions.find((s) => s.id === update.sessionId);
-      if (session) {
-        session.activity = update.activity;
-        this.otherSessions = [...this.otherSessions];
-      } else {
-        this.loadOtherSessions();
-      }
-    };
-  }
-
-  private disconnectSessionsSSE() {
-    if (this.sessionsEventSource) {
-      this.sessionsEventSource.close();
-      this.sessionsEventSource = null;
-    }
-  }
-
-  private getActiveSessions(): ActiveSessionItem[] {
-    const oneHourAgo = Date.now() - 3_600_000;
-    return this.otherSessions
-      .filter(
-        (s) =>
-          s.id !== this.sessionId &&
-          !isArchivedSessionName(s.name) &&
-          s.activity?.state !== "inactive" &&
-          new Date(s.lastActivityAt).getTime() > oneHourAgo,
-      )
-      .map((s) => ({
-        id: s.id,
-        name: isArchivedSessionName(s.name)
-          ? unarchiveSessionName(s.name)
-          : s.name,
-        attached: s.activity?.attached ?? false,
-        activeHere: s.activity?.activeHere ?? false,
-      }));
-  }
-
   private syncExtensionUiState() {
     const snapshot = this.extensionUiState.snapshot();
     if (snapshot.request !== this.extensionUiRequest) this.extensionUiRequest = snapshot.request;
@@ -276,8 +207,6 @@ export class ChatView extends LitElement {
     if (snapshot.statuses !== this.extensionStatuses) this.extensionStatuses = snapshot.statuses;
     if (snapshot.widgets !== this.extensionWidgets) this.extensionWidgets = snapshot.widgets;
   }
-
-  // ---- Interaction ----
 
   private onSend(e: CustomEvent<InputSubmission>) {
     this.routeAndSubmitInput(e.detail, "send");
@@ -398,8 +327,6 @@ export class ChatView extends LitElement {
     this.runtime?.send({ type: "set_follow_up_mode", mode: e.detail });
   }
 
-  // ---- Session actions ----
-
   private async loadSessionName() {
     const info = await fetchSessionInfo(this.sessionId);
     if (info) {
@@ -459,8 +386,6 @@ export class ChatView extends LitElement {
     }
   }
 
-  // ---- Scrolling & Deep Linking ----
-
   private onScroll = () => {
     const el = this.scrollContainer;
     if (!el) return;
@@ -514,8 +439,6 @@ export class ChatView extends LitElement {
     });
   }
 
-  // ---- Extension UI Actions ----
-
   private onExtensionInput = (e: InputEvent) => {
     this.extensionUiState.setInput((e.target as HTMLTextAreaElement).value);
     this.syncExtensionUiState();
@@ -549,10 +472,8 @@ export class ChatView extends LitElement {
     this.syncExtensionUiState();
   }
 
-  // ---- Data Helpers ----
-
   private getRenderableMessages(): AgentMessageData[] {
-    return getRenderableMessages(this.runtimeState?.messages || []);
+    return getRenderableMessages(this.runtimeState?.baseMessages || []);
   }
 
   private getSidebarEntries(renderable: AgentMessageData[]): SidebarEntry[] {
@@ -641,17 +562,17 @@ export class ChatView extends LitElement {
     });
   }
 
-  // ---- Main Render ----
-
   render() {
     const rs = this.runtimeState;
-    const messages = rs?.messages || [];
-    if (messages !== this._lastMessages) {
-      this._lastMessages = messages;
+    const baseMessages = rs?.baseMessages || [];
+    const streamingTail = rs?.streamingTail || [];
+
+    if (baseMessages !== this._lastBaseMessages) {
+      this._lastBaseMessages = baseMessages;
       this._cachedRenderable = this.getRenderableMessages();
       this._cachedStats = this.computeStats(this._cachedRenderable);
       this._cachedKnownTools = this.getKnownToolSpecs(this._cachedRenderable);
-      this._cachedUsageTotals = this.computeUsageTotals(messages);
+      this._cachedUsageTotals = this.computeUsageTotals(baseMessages);
     }
     const renderableMessages = this._cachedRenderable;
     const stats = this._cachedStats;
@@ -673,6 +594,13 @@ export class ChatView extends LitElement {
     const lastActivityAtLabel = this.formatDateTime(this.sessionLastActivityAt);
     const modelLabel = rs?.currentProvider ? `${rs.currentProvider}/${rs.currentModel}` : (rs?.currentModel || "unknown");
 
+    const allMessages = streamingTail.length > 0
+      ? [...baseMessages, ...streamingTail]
+      : baseMessages;
+    const allRenderable = streamingTail.length > 0
+      ? [...renderableMessages, ...getRenderableMessages(streamingTail)]
+      : renderableMessages;
+
     const isStreaming = rs?.isStreaming ?? false;
     const connected = rs?.connected ?? false;
     const reconnecting = rs?.reconnecting ?? false;
@@ -687,15 +615,15 @@ export class ChatView extends LitElement {
         : error ? html`<div class="cv-banner error">${error}</div>` : nothing}
 
       <div class="cv-body">
-        ${renderChatSidebar({
-          search: this.sidebarSearch,
-          filter: this.sidebarFilter,
-          entries: sidebarEntries,
-          activeSessions: this.getActiveSessions(),
-          onSearchInput: (e) => (this.sidebarSearch = (e.target as HTMLInputElement).value),
-          onSelectFilter: (mode) => (this.sidebarFilter = mode),
-          onFocusMessage: (targetId) => this.focusMessage(targetId),
-        })}
+        <session-sidebar
+          .sessionId=${this.sessionId}
+          .sidebarSearch=${this.sidebarSearch}
+          .sidebarFilter=${this.sidebarFilter}
+          .entries=${sidebarEntries}
+          @search-input=${(e: CustomEvent<string>) => (this.sidebarSearch = e.detail)}
+          @select-filter=${(e: CustomEvent<SidebarFilterMode>) => (this.sidebarFilter = e.detail)}
+          @focus-message=${(e: CustomEvent<string>) => this.focusMessage(e.detail)}
+        ></session-sidebar>
 
         <div class="cv-main-col">
           <a class="cv-back-btn" href="#/" title="Back to session list">&#8592;</a>
@@ -713,7 +641,7 @@ export class ChatView extends LitElement {
               persistedMessageStats: this.persistedMessageStats,
               usage: usageTotals,
               currentContextWindow: rs?.currentContextWindow || null,
-              contextMessageCount: renderableMessages.length,
+              contextMessageCount: allRenderable.length,
               systemPrompt: rs?.systemPrompt || "",
               knownTools,
               onStartRename: () => this.startRename(),
@@ -723,10 +651,10 @@ export class ChatView extends LitElement {
             })}
 
             <message-list
-              .messages=${renderableMessages}
-              .allMessages=${rs?.messages || []}
+              .messages=${allRenderable}
+              .allMessages=${allMessages}
               .isStreaming=${isStreaming}
-              .pendingToolCalls=${rs?.pendingToolCalls || new Set()}
+              .pendingToolCalls=${rs?.pendingToolCalls || EMPTY_SET}
               .showThinking=${this.showThinking}
               .expandToolOutputs=${this.expandToolOutputs}
             ></message-list>
