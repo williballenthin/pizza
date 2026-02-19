@@ -1449,6 +1449,10 @@ chat-view {
   padding: 0 14px;
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  width: min(100%, var(--max-width));
+  margin-left: auto;
+  margin-right: auto;
 }
 
 .cv-agent-spinner {
@@ -1474,7 +1478,6 @@ chat-view {
   font-size: 12px;
   line-height: 1;
   padding: 0;
-  margin-left: auto;
 }
 
 .cv-agent-stop-btn:hover {
