@@ -3,7 +3,14 @@ import { mkdir, writeFile } from "fs/promises";
 import { join } from "path";
 import { test, expect, type Page } from "@playwright/test";
 
-const E2E_SESSION_DIR = "/tmp/pi-web-e2e-sessions";
+const E2E_SESSIONS_ROOT = "/tmp/pi-web-e2e-sessions";
+const E2E_CWD = process.cwd();
+
+function encodeCwd(cwd: string): string {
+  return `--${cwd.replace(/^[/\\]/, "").replace(/[/\\:]/g, "-")}--`;
+}
+
+const E2E_BUCKET_DIR = join(E2E_SESSIONS_ROOT, encodeCwd(E2E_CWD));
 
 interface SessionMeta {
   id: string;
@@ -16,9 +23,12 @@ interface SeedSessionOptions {
   messages?: Array<Record<string, unknown> & { timestamp?: string }>;
 }
 
-// Helper to hit the REST API directly
 async function createSession(baseURL: string): Promise<string> {
-  const res = await fetch(`${baseURL}/api/sessions`, { method: "POST" });
+  const res = await fetch(`${baseURL}/api/sessions`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ cwd: E2E_CWD }),
+  });
   const data = (await res.json()) as { id: string };
   return data.id;
 }
@@ -43,7 +53,7 @@ function makeSessionJsonl(id: string, opts: SeedSessionOptions = {}): string {
       version: 3,
       id,
       timestamp: ts,
-      cwd: process.cwd(),
+      cwd: E2E_CWD,
     }),
   );
 
@@ -85,8 +95,8 @@ function makeSessionJsonl(id: string, opts: SeedSessionOptions = {}): string {
 async function createSeededSession(opts: SeedSessionOptions = {}): Promise<string> {
   const id = randomUUID();
   const fileName = `${Date.now()}_${id}.jsonl`;
-  await mkdir(E2E_SESSION_DIR, { recursive: true });
-  await writeFile(join(E2E_SESSION_DIR, fileName), makeSessionJsonl(id, opts));
+  await mkdir(E2E_BUCKET_DIR, { recursive: true });
+  await writeFile(join(E2E_BUCKET_DIR, fileName), makeSessionJsonl(id, opts));
   return id;
 }
 
@@ -882,5 +892,46 @@ test.describe("Session Delete from Landing Page", () => {
         { timeout: 4000, message: "Session should be deleted" },
       )
       .toBe(false);
+  });
+});
+
+test.describe("Sidebar Active Sessions", () => {
+  test("shows other active sessions in sidebar on desktop", async ({
+    page,
+    baseURL,
+  }, testInfo) => {
+    test.skip(testInfo.project.name === "mobile", "Sidebar hidden on mobile");
+    const id1 = await createSession(baseURL!);
+    const id2 = await createSession(baseURL!);
+
+    await fetch(`${baseURL}/api/sessions/${id1}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Session Alpha" }),
+    });
+    await fetch(`${baseURL}/api/sessions/${id2}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "Session Beta" }),
+    });
+
+    try {
+      await openSession(page, id2);
+      await expect(page.locator("chat-view")).toBeAttached();
+
+      await page.evaluate((id) => { window.location.hash = `#/session/${id}`; }, id1);
+      await expect(page.locator("chat-view .cv-title")).not.toContainText("Session Beta", { timeout: 3000 });
+
+      const sessionLink = page.locator(".cv-sidebar-session-item").filter({
+        hasText: "Session Beta",
+      });
+      await expect(sessionLink).toBeVisible({ timeout: 10000 });
+
+      await sessionLink.click();
+      await expect(page).toHaveURL(new RegExp(`#/session/${id2}`));
+    } finally {
+      await deleteSession(baseURL!, id1);
+      await deleteSession(baseURL!, id2);
+    }
   });
 });

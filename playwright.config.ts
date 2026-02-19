@@ -21,7 +21,7 @@ export default defineConfig({
   ],
   webServer: {
     command:
-      "npx tsx src/server/main.ts --port 3001 --session-dir /tmp/pi-web-e2e-sessions",
+      "npx tsx src/server/main.ts --port 3001 --sessions-root /tmp/pi-web-e2e-sessions",
     port: 3001,
     reuseExistingServer: false,
     timeout: 15000,

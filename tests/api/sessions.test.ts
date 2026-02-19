@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { createApp, type AppInstance } from "../../src/server/app.js";
 import type { ServerConfig } from "../../src/server/config.js";
-import { mkdtemp, rm, writeFile } from "fs/promises";
+import { encodeCwd } from "../../src/server/config.js";
+import { mkdtemp, rm, writeFile, mkdir } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 import { execSync } from "child_process";
@@ -74,17 +75,27 @@ function makeSessionJsonl(
   return lines.join("\n") + "\n";
 }
 
+async function makeSessionsRoot(cwdDir: string): Promise<{ sessionsRoot: string; bucketDir: string }> {
+  const sessionsRoot = await mkdtemp(join(tmpdir(), "pi-web-test-root-"));
+  const bucketName = encodeCwd(cwdDir);
+  const bucketDir = join(sessionsRoot, bucketName);
+  await mkdir(bucketDir, { recursive: true });
+  return { sessionsRoot, bucketDir };
+}
+
 describe("GET /api/health", () => {
   let app: AppInstance;
   let baseUrl: string;
-  let sessionDir: string;
+  let sessionsRoot: string;
+  let cwdDir: string;
 
   beforeAll(async () => {
-    sessionDir = await mkdtemp(join(tmpdir(), "pi-web-test-"));
+    cwdDir = await mkdtemp(join(tmpdir(), "pi-web-cwd-"));
+    const result = await makeSessionsRoot(cwdDir);
+    sessionsRoot = result.sessionsRoot;
     const config: ServerConfig = {
       port: 0,
-      sessionDir,
-      cwd: sessionDir,
+      sessionsRoot,
       idleTimeoutMs: 5000,
       piCommand: "pi",
     };
@@ -98,7 +109,8 @@ describe("GET /api/health", () => {
 
   afterAll(async () => {
     await app.close();
-    await rm(sessionDir, { recursive: true, force: true });
+    await rm(sessionsRoot, { recursive: true, force: true });
+    await rm(cwdDir, { recursive: true, force: true });
   });
 
   it("returns status ok", async () => {
@@ -107,46 +119,55 @@ describe("GET /api/health", () => {
     const data = await res.json();
     expect(data.status).toBe("ok");
     expect(typeof data.activeSessions).toBe("number");
+    expect(data.sessionsRoot).toBeDefined();
   });
 });
 
 describe("Session listing from JSONL files", () => {
   let app: AppInstance;
   let baseUrl: string;
-  let sessionDir: string;
+  let sessionsRoot: string;
+  let cwdDir: string;
+  let bucketDir: string;
 
   beforeAll(async () => {
-    sessionDir = await mkdtemp(join(tmpdir(), "pi-web-test-"));
+    cwdDir = await mkdtemp(join(tmpdir(), "pi-web-cwd-"));
+    const result = await makeSessionsRoot(cwdDir);
+    sessionsRoot = result.sessionsRoot;
+    bucketDir = result.bucketDir;
 
     const id1 = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
     const id2 = "11111111-2222-3333-4444-555555555555";
 
+    const now = new Date();
+    const ts1 = new Date(now.getTime() - 2 * 24 * 60 * 60 * 1000).toISOString();
+    const ts2 = new Date(now.getTime() - 1 * 24 * 60 * 60 * 1000).toISOString();
+
     await writeFile(
-      join(sessionDir, "2026-01-01T00-00-00_" + id1 + ".jsonl"),
+      join(bucketDir, "2026-01-01T00-00-00_" + id1 + ".jsonl"),
       makeSessionJsonl(id1, {
-        timestamp: "2026-01-01T00:00:00.000Z",
+        timestamp: ts1,
         name: "First Session",
         messages: [
-          { role: "user", content: "Hello", timestamp: "2026-01-01T00:00:01.000Z" },
-          { role: "assistant", content: "Hi!", timestamp: "2026-01-01T00:00:02.000Z" },
+          { role: "user", content: "Hello", timestamp: ts1 },
+          { role: "assistant", content: "Hi!", timestamp: ts1 },
         ],
       }),
     );
 
     await writeFile(
-      join(sessionDir, "2026-01-02T00-00-00_" + id2 + ".jsonl"),
+      join(bucketDir, "2026-01-02T00-00-00_" + id2 + ".jsonl"),
       makeSessionJsonl(id2, {
-        timestamp: "2026-01-02T00:00:00.000Z",
+        timestamp: ts2,
         messages: [
-          { role: "user", content: "Tell me about TypeScript generics and how they work", timestamp: "2026-01-02T00:00:01.000Z" },
+          { role: "user", content: "Tell me about TypeScript generics and how they work", timestamp: ts2 },
         ],
       }),
     );
 
     const config: ServerConfig = {
       port: 0,
-      sessionDir,
-      cwd: sessionDir,
+      sessionsRoot,
       idleTimeoutMs: 5000,
       piCommand: "pi",
     };
@@ -160,7 +181,8 @@ describe("Session listing from JSONL files", () => {
 
   afterAll(async () => {
     await app.close();
-    await rm(sessionDir, { recursive: true, force: true });
+    await rm(sessionsRoot, { recursive: true, force: true });
+    await rm(cwdDir, { recursive: true, force: true });
   });
 
   it("lists sessions from JSONL files with correct metadata", async () => {
@@ -180,9 +202,10 @@ describe("Session listing from JSONL files", () => {
       toolCalls: 0,
       totalMessages: 2,
     });
-    expect(s1.createdAt).toBe("2026-01-01T00:00:00.000Z");
+    expect(s1.createdAt).toBeDefined();
     expect(s1.activity).toBeDefined();
     expect(typeof s1.activity.state).toBe("string");
+    expect(s1.cwdRaw).toBe(cwdDir);
 
     const s2 = data.sessions.find(
       (s: { id: string }) => s.id === "11111111-2222-3333-4444-555555555555",
@@ -258,17 +281,17 @@ describe("Session CRUD with real pi", () => {
 
   let app: AppInstance;
   let baseUrl: string;
-  let sessionDir: string;
-  let cwd: string;
+  let sessionsRoot: string;
+  let cwdDir: string;
 
   beforeAll(async () => {
-    sessionDir = await mkdtemp(join(tmpdir(), "pi-web-test-sessions-"));
-    cwd = await mkdtemp(join(tmpdir(), "pi-web-test-cwd-"));
+    cwdDir = await mkdtemp(join(tmpdir(), "pi-web-test-cwd-"));
+    const result = await makeSessionsRoot(cwdDir);
+    sessionsRoot = result.sessionsRoot;
 
     const config: ServerConfig = {
       port: 0,
-      sessionDir,
-      cwd,
+      sessionsRoot,
       idleTimeoutMs: 30000,
       piCommand: "pi",
     };
@@ -282,14 +305,18 @@ describe("Session CRUD with real pi", () => {
 
   afterAll(async () => {
     await app.close();
-    await rm(sessionDir, { recursive: true, force: true });
-    await rm(cwd, { recursive: true, force: true });
+    await rm(sessionsRoot, { recursive: true, force: true });
+    await rm(cwdDir, { recursive: true, force: true });
   });
 
   let createdId: string;
 
   it("POST /api/sessions creates a session with UUID", async () => {
-    const res = await fetch(`${baseUrl}/api/sessions`, { method: "POST" });
+    const res = await fetch(`${baseUrl}/api/sessions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cwd: cwdDir }),
+    });
     expect(res.status).toBe(201);
     const data = await res.json();
     expect(data.id).toBeDefined();
@@ -344,23 +371,27 @@ describe("Session CRUD with real pi", () => {
 describe("Session name fallbacks", () => {
   let app: AppInstance;
   let baseUrl: string;
-  let sessionDir: string;
+  let sessionsRoot: string;
+  let cwdDir: string;
+  let bucketDir: string;
 
   beforeAll(async () => {
-    sessionDir = await mkdtemp(join(tmpdir(), "pi-web-test-"));
+    cwdDir = await mkdtemp(join(tmpdir(), "pi-web-cwd-"));
+    const result = await makeSessionsRoot(cwdDir);
+    sessionsRoot = result.sessionsRoot;
+    bucketDir = result.bucketDir;
 
     const id = "abcdef01-2345-6789-abcd-ef0123456789";
     await writeFile(
-      join(sessionDir, "2026-01-01T00-00-00_" + id + ".jsonl"),
+      join(bucketDir, "fallback-test_" + id + ".jsonl"),
       makeSessionJsonl(id, {
-        timestamp: "2026-01-01T00:00:00.000Z",
+        timestamp: new Date().toISOString(),
       }),
     );
 
     const config: ServerConfig = {
       port: 0,
-      sessionDir,
-      cwd: sessionDir,
+      sessionsRoot,
       idleTimeoutMs: 5000,
       piCommand: "pi",
     };
@@ -374,7 +405,8 @@ describe("Session name fallbacks", () => {
 
   afterAll(async () => {
     await app.close();
-    await rm(sessionDir, { recursive: true, force: true });
+    await rm(sessionsRoot, { recursive: true, force: true });
+    await rm(cwdDir, { recursive: true, force: true });
   });
 
   it("uses UUID-based fallback name when no name or messages", async () => {
@@ -387,4 +419,3 @@ describe("Session name fallbacks", () => {
     expect(session.name).toBe("Session abcdef01");
   });
 });
-
