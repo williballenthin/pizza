@@ -167,6 +167,10 @@ export class SessionRuntime {
     }
   }
 
+  public optimisticUpdate(patch: Partial<SessionRuntimeState>) {
+    this.updateState(patch);
+  }
+
   public requestCommands(force = false) {
     if (!force && (this.state.commandsLoading || this.state.commands.length > 0)) return;
     this.updateState({ commandsLoading: true });

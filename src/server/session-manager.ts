@@ -512,9 +512,11 @@ export class SessionManager {
       try {
         const parsedLine = JSON.parse(lines[i]) as {
           type?: string;
+          customType?: string;
           timestamp?: string;
           name?: string;
           modelId?: string;
+          details?: { modelId?: string; provider?: string };
           message?: {
             role?: string;
             content?: string | Array<{ type: string; text?: string }>;
@@ -523,8 +525,11 @@ export class SessionManager {
 
         if (parsedLine.timestamp) lastTimestamp = parsedLine.timestamp;
 
-        if (parsedLine.type === "model_change" && parsedLine.modelId) {
-          model = parsedLine.modelId as string;
+        if (
+          parsedLine.customType === "model_change" &&
+          parsedLine.details?.modelId
+        ) {
+          model = parsedLine.details.modelId;
         }
 
         if (parsedLine.type === "session_info" && parsedLine.name) {

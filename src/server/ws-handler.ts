@@ -18,6 +18,10 @@ type PendingCommand =
   | { kind: "get_messages" }
   | { kind: "get_available_models" }
   | { kind: "get_commands" }
+  | { kind: "set_model" }
+  | { kind: "set_thinking_level" }
+  | { kind: "set_steering_mode" }
+  | { kind: "set_follow_up_mode" }
   | { kind: "bash"; command: string; includeInContext: boolean };
 
 interface LocalShellRun {
@@ -249,34 +253,40 @@ export async function handleSessionWebSocket(
       queuePendingCommand({ type: "get_state" }, { kind: "get_state" });
     },
     set_model: async (msg) => {
-      rpc.send({
-        type: "set_model",
-        provider: msg.provider,
-        modelId: msg.model,
-      });
+      queuePendingCommand(
+        { type: "set_model", provider: msg.provider, modelId: msg.model },
+        { kind: "set_model" },
+      );
       await sessions.addCustomMessage(
         sessionId,
         "model_change",
         `Model changed to **${msg.model}** (${msg.provider})`,
         { provider: msg.provider, modelId: msg.model },
       );
-      queuePendingCommand({ type: "get_state" }, { kind: "get_state" });
     },
     set_thinking_level: async (msg) => {
-      rpc.send({ type: "set_thinking_level", level: msg.level });
+      queuePendingCommand(
+        { type: "set_thinking_level", level: msg.level },
+        { kind: "set_thinking_level" },
+      );
       await sessions.addCustomMessage(
         sessionId,
         "thinking_level_change",
         `Thinking level changed to **${msg.level}**`,
         { level: msg.level },
       );
-      queuePendingCommand({ type: "get_state" }, { kind: "get_state" });
     },
     set_steering_mode: (msg) => {
-      rpc.send({ type: "set_steering_mode", mode: msg.mode });
+      queuePendingCommand(
+        { type: "set_steering_mode", mode: msg.mode },
+        { kind: "set_steering_mode" },
+      );
     },
     set_follow_up_mode: (msg) => {
-      rpc.send({ type: "set_follow_up_mode", mode: msg.mode });
+      queuePendingCommand(
+        { type: "set_follow_up_mode", mode: msg.mode },
+        { kind: "set_follow_up_mode" },
+      );
     },
     get_available_models: () => {
       queuePendingCommand(
@@ -542,6 +552,15 @@ function handlePendingRpcResponse(
           } as RpcEvent,
         });
       });
+      return true;
+    }
+
+    case "set_model":
+    case "set_thinking_level":
+    case "set_steering_mode":
+    case "set_follow_up_mode": {
+      const refreshId = rpc.send({ type: "get_state" });
+      pendingCommands.set(refreshId, { kind: "get_state" });
       return true;
     }
 

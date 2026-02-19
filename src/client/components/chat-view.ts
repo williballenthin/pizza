@@ -368,19 +368,23 @@ export class ChatView extends LitElement {
     const value = (e.target as HTMLSelectElement).value;
     const [provider, ...rest] = value.split("/");
     const model = rest.join("/");
+    this.runtime?.optimisticUpdate({ currentProvider: provider, currentModel: model });
     this.runtime?.send({ type: "set_model", provider, model });
   }
 
   private onStatusThinkingChange(e: Event) {
     const level = (e.target as HTMLSelectElement).value as ThinkingLevel;
+    this.runtime?.optimisticUpdate({ currentThinkingLevel: level });
     this.runtime?.send({ type: "set_thinking_level", level });
   }
 
   private onSteeringModeChange(e: CustomEvent<QueueDeliveryMode>) {
+    this.runtime?.optimisticUpdate({ currentSteeringMode: e.detail });
     this.runtime?.send({ type: "set_steering_mode", mode: e.detail });
   }
 
   private onFollowUpModeChange(e: CustomEvent<QueueDeliveryMode>) {
+    this.runtime?.optimisticUpdate({ currentFollowUpMode: e.detail });
     this.runtime?.send({ type: "set_follow_up_mode", mode: e.detail });
   }
 
