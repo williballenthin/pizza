@@ -1,6 +1,6 @@
 import { LitElement, html, css, nothing } from "lit";
 import { customElement, state } from "lit/decorators.js";
-import type { SessionMeta, SessionActivityState } from "@shared/types.js";
+import type { SessionMeta, SessionActivityState, SessionActivityUpdate } from "@shared/types.js";
 import {
   archiveSessionName,
   isArchivedSessionName,
@@ -18,6 +18,8 @@ export class SessionList extends LitElement {
   @state() private renameValue = "";
 
   private longPressTimer: ReturnType<typeof setTimeout> | null = null;
+  private eventSource: EventSource | null = null;
+  private sseHasConnected = false;
 
   static styles = css`
     :host {
@@ -88,7 +90,7 @@ export class SessionList extends LitElement {
     .session-item {
       display: block;
       padding: 8px 20px;
-      border-bottom: 0px solid transparent; /* Removed borders per issue #12 */
+      border-bottom: 0px solid transparent;
       cursor: pointer;
       text-decoration: none;
       color: inherit;
@@ -100,7 +102,23 @@ export class SessionList extends LitElement {
     }
 
     .session-item:not(:last-child) {
-       margin-bottom: 2px; /* Extra spacing if borderless */
+       margin-bottom: 2px;
+    }
+
+    .group-spacer {
+      height: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .group-spacer::after {
+      content: "";
+      display: block;
+      width: 50%;
+      height: 1px;
+      background: var(--borderMuted);
+      opacity: 0.5;
     }
 
     .session-item:hover {
@@ -331,6 +349,38 @@ export class SessionList extends LitElement {
   connectedCallback() {
     super.connectedCallback();
     this.loadSessions();
+    this.connectSSE();
+  }
+
+  disconnectedCallback() {
+    super.disconnectedCallback();
+    if (this.eventSource) {
+      this.eventSource.close();
+      this.eventSource = null;
+    }
+  }
+
+  private connectSSE() {
+    this.eventSource = new EventSource("/api/sessions/events");
+    this.sseHasConnected = false;
+
+    this.eventSource.onopen = () => {
+      if (this.sseHasConnected) {
+        this.loadSessions();
+      }
+      this.sseHasConnected = true;
+    };
+
+    this.eventSource.onmessage = (e) => {
+      const update: SessionActivityUpdate = JSON.parse(e.data);
+      const session = this.sessions.find((s) => s.id === update.sessionId);
+      if (session) {
+        session.activity = update.activity;
+        this.sessions = [...this.sessions];
+      } else {
+        this.loadSessions();
+      }
+    };
   }
 
   private async loadSessions() {
@@ -359,11 +409,6 @@ export class SessionList extends LitElement {
     }
   }
 
-  private openSession(id: string) {
-    if (this.renamingId || this.contextMenuSessionId) return;
-    window.location.hash = `#/session/${id}`;
-  }
-
   // ---- Context menu ----
 
   private showContextMenu(id: string, x: number, y: number) {
@@ -373,11 +418,6 @@ export class SessionList extends LitElement {
 
   private closeContextMenu() {
     this.contextMenuSessionId = null;
-  }
-
-  private onContextMenu(e: MouseEvent, id: string) {
-    e.preventDefault();
-    this.showContextMenu(id, e.clientX, e.clientY);
   }
 
   private onTouchStart(e: TouchEvent, id: string) {
@@ -521,7 +561,7 @@ export class SessionList extends LitElement {
             `
           : html`
               <div class="list">
-                ${this.sessions.map((s) => this.renderSession(s))}
+                ${this.renderGroupedSessions()}
               </div>
             `}
 
@@ -549,6 +589,29 @@ export class SessionList extends LitElement {
     `;
   }
 
+  private getTimeGroup(iso: string): number {
+    const diff = Date.now() - new Date(iso).getTime();
+    const minutes = diff / 60_000;
+    if (minutes < 15) return 0;
+    if (minutes < 480) return 1;
+    if (minutes < 1440) return 2;
+    return 3;
+  }
+
+  private renderGroupedSessions() {
+    const items: unknown[] = [];
+    let lastGroup = -1;
+    for (const s of this.sessions) {
+      const group = this.getTimeGroup(s.lastActivityAt);
+      if (lastGroup !== -1 && group !== lastGroup) {
+        items.push(html`<div class="group-spacer"></div>`);
+      }
+      lastGroup = group;
+      items.push(this.renderSession(s));
+    }
+    return items;
+  }
+
   private renderSession(s: SessionMeta) {
     const isRenaming = this.renamingId === s.id;
     const archived = isArchivedSessionName(s.name);
@@ -563,11 +626,9 @@ export class SessionList extends LitElement {
     ];
 
     return html`
-      <div
+      <a
         class="session-item ${archived ? "archived" : ""}"
-        @click=${() => this.openSession(s.id)}
-        title="Open session ${this.getSessionDisplayName(s)}"
-        @contextmenu=${(e: MouseEvent) => this.onContextMenu(e, s.id)}
+        href="#/session/${s.id}"
         @touchstart=${(e: TouchEvent) => this.onTouchStart(e, s.id)}
         @touchend=${this.onTouchEnd}
         @touchcancel=${this.onTouchEnd}
@@ -620,7 +681,7 @@ export class SessionList extends LitElement {
         >
           ⋯
         </button>
-      </div>
+      </a>
     `;
   }
 

@@ -18,6 +18,11 @@ export interface SessionActivity {
   isWorking: boolean;
 }
 
+export interface SessionActivityUpdate {
+  sessionId: string;
+  activity: SessionActivity;
+}
+
 export interface SessionMeta {
   id: string;
   name: string;

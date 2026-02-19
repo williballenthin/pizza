@@ -23,6 +23,28 @@ export function createRouter(sessions: SessionManager): Router {
     res.json({ sessions: list });
   });
 
+  // SSE: live session activity updates (must precede /sessions/:id routes)
+  router.get("/sessions/events", (req, res) => {
+    res.writeHead(200, {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache",
+      Connection: "keep-alive",
+    });
+
+    const heartbeat = setInterval(() => {
+      res.write(": heartbeat\n\n");
+    }, 30_000);
+
+    const unsubscribe = sessions.onActivityChange((update) => {
+      res.write(`data: ${JSON.stringify(update)}\n\n`);
+    });
+
+    req.on("close", () => {
+      clearInterval(heartbeat);
+      unsubscribe();
+    });
+  });
+
   // Create session
   router.post("/sessions", async (_req, res) => {
     try {

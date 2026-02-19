@@ -3,6 +3,7 @@ import { join } from "path";
 import { RpcProcess } from "./rpc-process.js";
 import type {
   SessionMeta,
+  SessionActivityUpdate,
   RpcEvent,
   SessionActivityState,
   AgentMessageData,
@@ -42,6 +43,7 @@ export class SessionManager {
   private sessionFileById = new Map<string, string>();
   private sessionIdByFile = new Map<string, string>();
   private recentClientActivityAt = new Map<string, number>();
+  private activityListeners = new Set<(update: SessionActivityUpdate) => void>();
 
   constructor(private config: ServerConfig) {}
 
@@ -229,6 +231,7 @@ export class SessionManager {
       }
       entry.clients.add(listener);
       this.noteClientActivity(sessionId);
+      this.broadcastActivity(sessionId);
       return entry.rpc;
     }
 
@@ -259,6 +262,7 @@ export class SessionManager {
 
     entry.clients.add(listener);
     this.noteClientActivity(sessionId);
+    this.broadcastActivity(sessionId);
     return rpc;
   }
 
@@ -269,6 +273,7 @@ export class SessionManager {
     const hadListener = entry.clients.delete(listener);
     if (hadListener) {
       this.noteClientActivity(sessionId);
+      this.broadcastActivity(sessionId);
     }
 
     if (entry.clients.size === 0) {
@@ -286,6 +291,21 @@ export class SessionManager {
     this.active.clear();
   }
 
+  onActivityChange(listener: (update: SessionActivityUpdate) => void): () => void {
+    this.activityListeners.add(listener);
+    return () => { this.activityListeners.delete(listener); };
+  }
+
+  private broadcastActivity(sessionId: string): void {
+    if (this.activityListeners.size === 0) return;
+    const meta = { id: sessionId, lastActivityAt: new Date().toISOString() };
+    const activity = this.computeActivity(meta, Date.now());
+    const update: SessionActivityUpdate = { sessionId, activity };
+    for (const listener of this.activityListeners) {
+      listener(update);
+    }
+  }
+
   private bindRpcHandlers(entry: ActiveSession): void {
     const sessionId = entry.sessionId;
 
@@ -296,11 +316,13 @@ export class SessionManager {
           clearTimeout(entry.idleTimer);
           entry.idleTimer = null;
         }
+        this.broadcastActivity(sessionId);
       } else if (event.type === "turn_end") {
         entry.isAgentWorking = false;
         if (entry.clients.size === 0) {
           this.startIdleTimer(sessionId, entry);
         }
+        this.broadcastActivity(sessionId);
       }
 
       if (entry.clients.size > 0) {
@@ -316,6 +338,7 @@ export class SessionManager {
         client({ type: "error", message: "RPC process exited" } as RpcEvent);
       }
       this.active.delete(sessionId);
+      this.broadcastActivity(sessionId);
     });
 
     entry.rpc.on("error", (err: Error) => {
