@@ -234,14 +234,14 @@ export class SessionList extends LitElement {
       height: 26px;
       border: none;
       border-radius: 5px;
-      background: var(--accent);
-      color: #fff;
+      background: transparent;
+      color: var(--muted);
       cursor: pointer;
       display: inline-flex;
       align-items: center;
       justify-content: center;
       opacity: 0;
-      transition: opacity 120ms ease;
+      transition: opacity 120ms ease, color 120ms ease;
     }
 
     .session-item:hover .session-archive-btn {
@@ -251,7 +251,7 @@ export class SessionList extends LitElement {
     .session-archive-btn:hover,
     .session-archive-btn:focus-visible {
       opacity: 1;
-      filter: brightness(1.15);
+      color: var(--text-primary);
       outline: none;
     }
 
