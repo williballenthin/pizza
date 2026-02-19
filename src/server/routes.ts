@@ -1,29 +1,25 @@
 import { Router, json } from "express";
-import { spawnSync } from "child_process";
+import { stat } from "fs/promises";
 import type { SessionManager } from "./session-manager.js";
+import { listProjects } from "./project-registry.js";
 
 export function createRouter(sessions: SessionManager): Router {
   const router = Router();
-  const gitBranch = resolveGitBranch(sessions.cwd);
   router.use(json());
 
-  // Health check
   router.get("/health", (_req, res) => {
     res.json({
       status: "ok",
       activeSessions: sessions.activeCount,
-      cwd: sessions.cwd,
-      gitBranch,
+      sessionsRoot: sessions.sessionsRoot,
     });
   });
 
-  // List sessions
   router.get("/sessions", async (_req, res) => {
     const list = await sessions.listSessions();
     res.json({ sessions: list });
   });
 
-  // SSE: live session activity updates (must precede /sessions/:id routes)
   router.get("/sessions/events", (req, res) => {
     res.writeHead(200, {
       "Content-Type": "text/event-stream",
@@ -45,10 +41,21 @@ export function createRouter(sessions: SessionManager): Router {
     });
   });
 
-  // Create session
-  router.post("/sessions", async (_req, res) => {
+  router.post("/sessions", async (req, res) => {
+    const cwd = req.body?.cwd;
+    if (typeof cwd !== "string" || !cwd) {
+      res.status(400).json({ error: "Missing required field: cwd" });
+      return;
+    }
     try {
-      const id = await sessions.createSession();
+      const s = await stat(cwd);
+      if (!s.isDirectory()) throw new Error("not a directory");
+    } catch {
+      res.status(400).json({ error: `Invalid directory: ${cwd}` });
+      return;
+    }
+    try {
+      const id = await sessions.createSession(cwd);
       res.status(201).json({ id });
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to create session";
@@ -57,7 +64,6 @@ export function createRouter(sessions: SessionManager): Router {
     }
   });
 
-  // Update session
   router.patch("/sessions/:id", async (req, res) => {
     try {
       const result = await sessions.updateSession(req.params.id, req.body);
@@ -73,7 +79,6 @@ export function createRouter(sessions: SessionManager): Router {
     }
   });
 
-  // Delete session
   router.delete("/sessions/:id", async (req, res) => {
     try {
       const ok = await sessions.deleteSession(req.params.id);
@@ -89,21 +94,10 @@ export function createRouter(sessions: SessionManager): Router {
     }
   });
 
+  router.get("/projects", async (_req, res) => {
+    const projects = await listProjects(sessions.sessionsRoot);
+    res.json({ projects });
+  });
+
   return router;
-}
-
-function resolveGitBranch(cwd: string): string | undefined {
-  try {
-    const result = spawnSync("git", ["-C", cwd, "rev-parse", "--abbrev-ref", "HEAD"], {
-      encoding: "utf-8",
-      stdio: ["ignore", "pipe", "ignore"],
-    });
-
-    if (result.status !== 0) return undefined;
-
-    const branch = result.stdout.trim();
-    return branch || undefined;
-  } catch {
-    return undefined;
-  }
 }

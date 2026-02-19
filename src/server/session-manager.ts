@@ -1,5 +1,6 @@
 import { readdir, readFile, rm, mkdir, appendFile, stat } from "fs/promises";
 import { join } from "path";
+import { homedir } from "os";
 import { RpcProcess } from "./rpc-process.js";
 import type {
   SessionMeta,
@@ -11,11 +12,15 @@ import type {
 } from "@shared/types.js";
 import { countMessageStats, emptyMessageStats, type JsonlMessageEntry } from "@shared/session-stats.js";
 import type { ServerConfig } from "./config.js";
+import { encodeCwd } from "./config.js";
+import { decodeCwd } from "./project-registry.js";
 
 interface ActiveSession {
   rpc: RpcProcess;
   sessionId: string;
   sessionFile: string | undefined;
+  bucketDir: string;
+  cwd: string;
   name: string | undefined;
   createdAt: string;
   idleTimer: ReturnType<typeof setTimeout> | null;
@@ -25,12 +30,14 @@ interface ActiveSession {
 
 interface ParsedSessionFile {
   file: string;
+  bucketDir: string;
   id: string;
   createdAt: string;
   name: string | undefined;
   lastActivityAt: string;
   messageStats: SessionMessageStats;
   model: string | undefined;
+  cwd: string;
 }
 
 interface CachedParsedSessionFile {
@@ -39,10 +46,12 @@ interface CachedParsedSessionFile {
   size: number;
 }
 
+const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
+
 export class SessionManager {
   private active = new Map<string, ActiveSession>();
   private fileCache = new Map<string, CachedParsedSessionFile>();
-  private sessionFileById = new Map<string, string>();
+  private sessionFileById = new Map<string, { bucketDir: string; file: string }>();
   private sessionIdByFile = new Map<string, string>();
   private recentClientActivityAt = new Map<string, number>();
   private activityListeners = new Set<(update: SessionActivityUpdate) => void>();
@@ -53,22 +62,27 @@ export class SessionManager {
     return this.active.size;
   }
 
-  get cwd(): string {
-    return this.config.cwd;
+  get sessionsRoot(): string {
+    return this.config.sessionsRoot;
   }
 
   async listSessions(): Promise<SessionMeta[]> {
-    await mkdir(this.config.sessionDir, { recursive: true });
-
     const now = Date.now();
     this.pruneRecentClientActivity(now);
 
-    const diskSessions = await this.scanSessionFiles();
+    const diskSessions = await this.scanAllBuckets();
     const seen = new Set<string>();
     const sessions: SessionMeta[] = [];
 
     for (const parsed of diskSessions) {
+      if (Date.now() - Date.parse(parsed.lastActivityAt) > SEVEN_DAYS_MS) continue;
       seen.add(parsed.id);
+
+      const home = homedir();
+      const cwdDisplay = parsed.cwd.startsWith(home)
+        ? "~" + parsed.cwd.slice(home.length)
+        : parsed.cwd;
+
       sessions.push(
         this.decorateWithActivity(
           {
@@ -78,6 +92,8 @@ export class SessionManager {
             lastActivityAt: parsed.lastActivityAt,
             messageStats: parsed.messageStats,
             model: parsed.model,
+            cwd: cwdDisplay,
+            cwdRaw: parsed.cwd,
           },
           now,
         ),
@@ -92,6 +108,11 @@ export class SessionManager {
           existing.activity = this.computeActivity(existing, now);
         }
       } else {
+        const home = homedir();
+        const cwdDisplay = entry.cwd.startsWith(home)
+          ? "~" + entry.cwd.slice(home.length)
+          : entry.cwd;
+
         sessions.push(
           this.decorateWithActivity(
             {
@@ -100,6 +121,8 @@ export class SessionManager {
               createdAt: entry.createdAt,
               lastActivityAt: entry.createdAt,
               messageStats: emptyMessageStats(),
+              cwd: cwdDisplay,
+              cwdRaw: entry.cwd,
             },
             now,
           ),
@@ -116,11 +139,14 @@ export class SessionManager {
     return sessions;
   }
 
-  async createSession(): Promise<string> {
+  async createSession(cwd: string): Promise<string> {
+    const bucketDir = join(this.config.sessionsRoot, encodeCwd(cwd));
+    await mkdir(bucketDir, { recursive: true });
+
     const env = this.buildEnv();
     const rpc = new RpcProcess(
       this.config.piCommand,
-      this.config.cwd,
+      cwd,
       undefined,
       env,
     );
@@ -136,6 +162,8 @@ export class SessionManager {
       rpc,
       sessionId,
       sessionFile,
+      bucketDir,
+      cwd,
       name: undefined,
       createdAt: new Date().toISOString(),
       idleTimer: null,
@@ -169,8 +197,8 @@ export class SessionManager {
       return sessions.find((s) => s.id === id) || null;
     }
 
-    const sessionFile = await this.findSessionFile(id);
-    if (!sessionFile) return null;
+    const loc = await this.findSessionFile(id);
+    if (!loc) return null;
 
     const infoEntry = {
       type: "session_info",
@@ -180,11 +208,12 @@ export class SessionManager {
       name: updates.name,
     };
     await appendFile(
-      join(this.config.sessionDir, sessionFile),
+      join(loc.bucketDir, loc.file),
       JSON.stringify(infoEntry) + "\n",
     );
 
-    this.fileCache.delete(sessionFile);
+    const cacheKey = loc.bucketDir + "/" + loc.file;
+    this.fileCache.delete(cacheKey);
 
     const sessions = await this.listSessions();
     return sessions.find((s) => s.id === id) || null;
@@ -198,17 +227,18 @@ export class SessionManager {
       this.active.delete(id);
     }
 
-    const sessionFile = await this.findSessionFile(id);
-    if (!sessionFile && !active) return false;
+    const loc = await this.findSessionFile(id);
+    if (!loc && !active) return false;
 
-    if (sessionFile) {
-      const filePath = join(this.config.sessionDir, sessionFile);
+    if (loc) {
+      const filePath = join(loc.bucketDir, loc.file);
       try {
         await rm(filePath, { force: true });
-        this.fileCache.delete(sessionFile);
-        const mappedId = this.sessionIdByFile.get(sessionFile);
-        this.sessionIdByFile.delete(sessionFile);
-        if (mappedId && this.sessionFileById.get(mappedId) === sessionFile) {
+        const cacheKey = loc.bucketDir + "/" + loc.file;
+        this.fileCache.delete(cacheKey);
+        const mappedId = this.sessionIdByFile.get(cacheKey);
+        this.sessionIdByFile.delete(cacheKey);
+        if (mappedId && this.sessionFileById.get(mappedId)?.file === loc.file) {
           this.sessionFileById.delete(mappedId);
         }
       } catch {
@@ -223,7 +253,7 @@ export class SessionManager {
   async getOrSpawn(
     sessionId: string,
     listener: (event: RpcEvent) => void,
-  ): Promise<RpcProcess> {
+  ): Promise<{ rpc: RpcProcess; cwd: string }> {
     let entry = this.active.get(sessionId);
 
     if (entry && entry.rpc.alive) {
@@ -234,22 +264,27 @@ export class SessionManager {
       entry.clients.add(listener);
       this.noteClientActivity(sessionId);
       this.broadcastActivity(sessionId);
-      return entry.rpc;
+      return { rpc: entry.rpc, cwd: entry.cwd };
     }
 
-    const sessionFile = await this.findSessionFile(sessionId);
+    const loc = await this.findSessionFile(sessionId);
+    const cwd = loc ? (await decodeCwd(loc.bucketDir.split("/").pop()!) ?? process.cwd()) : process.cwd();
+    const bucketDir = loc ? loc.bucketDir : join(this.config.sessionsRoot, encodeCwd(cwd));
+
     const env = this.buildEnv();
     const rpc = new RpcProcess(
       this.config.piCommand,
-      this.config.cwd,
-      sessionFile ? join(this.config.sessionDir, sessionFile) : undefined,
+      cwd,
+      loc ? join(loc.bucketDir, loc.file) : undefined,
       env,
     );
 
     entry = {
       rpc,
       sessionId,
-      sessionFile,
+      sessionFile: loc?.file,
+      bucketDir,
+      cwd,
       name: undefined,
       createdAt: new Date().toISOString(),
       idleTimer: null,
@@ -265,7 +300,7 @@ export class SessionManager {
     entry.clients.add(listener);
     this.noteClientActivity(sessionId);
     this.broadcastActivity(sessionId);
-    return rpc;
+    return { rpc, cwd };
   }
 
   detach(sessionId: string, listener: (event: RpcEvent) => void): void {
@@ -372,44 +407,64 @@ export class SessionManager {
     return env;
   }
 
-  private async scanSessionFiles(): Promise<ParsedSessionFile[]> {
-    let entries: string[];
+  private async scanAllBuckets(): Promise<ParsedSessionFile[]> {
+    let rootEntries: string[];
     try {
-      entries = await readdir(this.config.sessionDir);
+      rootEntries = await readdir(this.config.sessionsRoot);
     } catch {
       return [];
     }
 
-    const jsonlFiles = entries.filter((file) => file.endsWith(".jsonl"));
-    const existingFiles = new Set(jsonlFiles);
+    const buckets = rootEntries.filter(e => e.startsWith("--") && e.endsWith("--"));
+    const results: ParsedSessionFile[] = [];
 
-    for (const file of Array.from(this.fileCache.keys())) {
-      if (!existingFiles.has(file)) {
-        this.fileCache.delete(file);
+    for (const bucket of buckets) {
+      const bucketPath = join(this.config.sessionsRoot, bucket);
+      const cwd = await decodeCwd(bucket);
+      if (!cwd) continue;
+
+      let entries: string[];
+      try {
+        entries = await readdir(bucketPath);
+      } catch {
+        continue;
       }
-    }
 
-    for (const [file, id] of Array.from(this.sessionIdByFile.entries())) {
-      if (!existingFiles.has(file)) {
-        this.sessionIdByFile.delete(file);
-        if (this.sessionFileById.get(id) === file) {
-          this.sessionFileById.delete(id);
+      const jsonlFiles = entries.filter(f => f.endsWith(".jsonl"));
+
+      const existingKeys = new Set(jsonlFiles.map(f => bucketPath + "/" + f));
+      for (const key of Array.from(this.fileCache.keys())) {
+        if (key.startsWith(bucketPath + "/") && !existingKeys.has(key)) {
+          this.fileCache.delete(key);
         }
       }
+
+      for (const [fileKey, id] of Array.from(this.sessionIdByFile.entries())) {
+        if (fileKey.startsWith(bucketPath + "/") && !existingKeys.has(fileKey)) {
+          this.sessionIdByFile.delete(fileKey);
+          const loc = this.sessionFileById.get(id);
+          if (loc && loc.bucketDir === bucketPath) {
+            this.sessionFileById.delete(id);
+          }
+        }
+      }
+
+      for (const file of jsonlFiles) {
+        const parsed = await this.parseSessionFile(file, bucketPath, cwd);
+        if (parsed) results.push(parsed);
+      }
     }
 
-    const results: ParsedSessionFile[] = [];
-    for (const file of jsonlFiles) {
-      const parsed = await this.parseSessionFile(file);
-      if (parsed) results.push(parsed);
-    }
     return results;
   }
 
   private async parseSessionFile(
     file: string,
+    bucketDir: string,
+    cwd: string,
   ): Promise<ParsedSessionFile | null> {
-    const filePath = join(this.config.sessionDir, file);
+    const filePath = join(bucketDir, file);
+    const cacheKey = bucketDir + "/" + file;
 
     let fileStat: { mtimeMs: number; size: number };
     try {
@@ -419,7 +474,7 @@ export class SessionManager {
       return null;
     }
 
-    const cached = this.fileCache.get(file);
+    const cached = this.fileCache.get(cacheKey);
     if (
       cached &&
       cached.mtimeMs === fileStat.mtimeMs &&
@@ -509,22 +564,24 @@ export class SessionManager {
 
     const parsed: ParsedSessionFile = {
       file,
+      bucketDir,
       id: header.id,
       createdAt: header.timestamp || new Date().toISOString(),
       name,
       lastActivityAt: lastTimestamp,
       messageStats: countMessageStats(messageEntries),
       model,
+      cwd,
     };
 
-    const previousIdForFile = this.sessionIdByFile.get(file);
+    const previousIdForFile = this.sessionIdByFile.get(cacheKey);
     if (previousIdForFile && previousIdForFile !== parsed.id) {
       this.sessionFileById.delete(previousIdForFile);
     }
-    this.sessionIdByFile.set(file, parsed.id);
-    this.sessionFileById.set(parsed.id, file);
+    this.sessionIdByFile.set(cacheKey, parsed.id);
+    this.sessionFileById.set(parsed.id, { bucketDir, file });
 
-    this.fileCache.set(file, {
+    this.fileCache.set(cacheKey, {
       parsed,
       mtimeMs: fileStat.mtimeMs,
       size: fileStat.size,
@@ -533,22 +590,24 @@ export class SessionManager {
     return parsed;
   }
 
-  private async findSessionFile(sessionId: string): Promise<string | undefined> {
-    const cachedFile = this.sessionFileById.get(sessionId);
-    if (cachedFile) {
-      const parsed = await this.parseSessionFile(cachedFile);
+  private async findSessionFile(sessionId: string): Promise<{ bucketDir: string; file: string } | undefined> {
+    const cached = this.sessionFileById.get(sessionId);
+    if (cached) {
+      const parsed = await this.parseSessionFile(cached.file, cached.bucketDir, "");
       if (parsed?.id === sessionId) {
-        return cachedFile;
+        return cached;
       }
-
       this.sessionFileById.delete(sessionId);
-      if (this.sessionIdByFile.get(cachedFile) === sessionId) {
-        this.sessionIdByFile.delete(cachedFile);
+      const cacheKey = cached.bucketDir + "/" + cached.file;
+      if (this.sessionIdByFile.get(cacheKey) === sessionId) {
+        this.sessionIdByFile.delete(cacheKey);
       }
     }
 
-    const files = await this.scanSessionFiles();
-    return files.find((f) => f.id === sessionId)?.file;
+    const files = await this.scanAllBuckets();
+    const match = files.find((f) => f.id === sessionId);
+    if (!match) return undefined;
+    return { bucketDir: match.bucketDir, file: match.file };
   }
 
   private decorateWithActivity(meta: Omit<SessionMeta, "activity">, now: number): SessionMeta {
@@ -616,10 +675,10 @@ export class SessionManager {
   }
 
   async getHistory(sessionId: string): Promise<AgentMessageData[]> {
-    const sessionFile = await this.findSessionFile(sessionId);
-    if (!sessionFile) return [];
+    const loc = await this.findSessionFile(sessionId);
+    if (!loc) return [];
 
-    const filePath = join(this.config.sessionDir, sessionFile);
+    const filePath = join(loc.bucketDir, loc.file);
     try {
       const content = await readFile(filePath, "utf-8");
       const lines = content.split("\n").filter((l) => l.trim());
@@ -641,9 +700,7 @@ export class SessionManager {
 
       if (entries.length === 0) return [];
 
-      // Find the last message or compaction as our leaf
       let leaf = entries[entries.length - 1];
-      // Walk from leaf to root to get the current branch path
       const path: any[] = [];
       let current = leaf;
       while (current) {
@@ -696,13 +753,13 @@ export class SessionManager {
     content: string,
     details?: any,
   ): Promise<void> {
-    const sessionFile = await this.findSessionFile(sessionId);
-    if (!sessionFile) return;
+    const loc = await this.findSessionFile(sessionId);
+    if (!loc) return;
 
     const entry = {
       type: "custom_message",
       id: randomHexId(),
-      parentId: null, // We don't easily know the parentId here
+      parentId: null,
       timestamp: new Date().toISOString(),
       customType,
       content,
@@ -711,11 +768,12 @@ export class SessionManager {
     };
 
     await appendFile(
-      join(this.config.sessionDir, sessionFile),
+      join(loc.bucketDir, loc.file),
       JSON.stringify(entry) + "\n",
     );
 
-    this.fileCache.delete(sessionFile);
+    const cacheKey = loc.bucketDir + "/" + loc.file;
+    this.fileCache.delete(cacheKey);
   }
 
   private pruneRecentClientActivity(now: number): void {

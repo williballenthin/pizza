@@ -113,8 +113,11 @@ export async function handleSessionWebSocket(
   };
 
   let rpc: RpcProcess;
+  let sessionCwd: string;
   try {
-    rpc = await sessions.getOrSpawn(sessionId, listener);
+    const result = await sessions.getOrSpawn(sessionId, listener);
+    rpc = result.rpc;
+    sessionCwd = result.cwd;
   } catch (err) {
     const message =
       err instanceof Error ? err.message : "Failed to open session";
@@ -152,7 +155,7 @@ export async function handleSessionWebSocket(
 
   const startLocalShellRun = (command: string): void => {
     try {
-      const run = startLocalShell(command, sessions.cwd);
+      const run = startLocalShell(command, sessionCwd);
       const localRun: LocalShellRun = {
         command,
         proc: run.proc,
@@ -314,7 +317,9 @@ export async function handleSessionWebSocket(
 
     if (!rpc.alive) {
       try {
-        rpc = await sessions.getOrSpawn(sessionId, listener);
+        const result = await sessions.getOrSpawn(sessionId, listener);
+        rpc = result.rpc;
+        sessionCwd = result.cwd;
       } catch (err) {
         const message =
           err instanceof Error ? err.message : "Failed to open session";

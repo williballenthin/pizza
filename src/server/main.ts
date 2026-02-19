@@ -16,5 +16,5 @@ process.on("SIGINT", () => {
 
 server.listen(config.port, () => {
   console.log(`Pi Web UI running on http://localhost:${config.port}`);
-  console.log(`Session dir: ${config.sessionDir}`);
+  console.log(`Sessions root: ${config.sessionsRoot}`);
 });
