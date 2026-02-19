@@ -1,10 +1,10 @@
 import { html, nothing } from "lit";
-import type { ToolSpec } from "@shared/types.js";
+import type { ToolSpec, SessionMessageStats } from "@shared/types.js";
+import type { UsageTotals } from "./render-chat-editor-footer.js";
 
 interface SessionInfoStats {
   userMessages: number;
   assistantMessages: number;
-  toolResults: number;
   toolCalls: number;
 }
 
@@ -18,8 +18,11 @@ interface RenderSessionInfoStackOptions {
   modelLabel: string;
   thinkingLevel: string;
   stats: SessionInfoStats;
-  persistedMessageCount: number;
+  persistedMessageStats: SessionMessageStats;
   pendingMessageCount: number;
+  usage: UsageTotals;
+  currentContextWindow: number | null;
+  contextMessageCount: number;
   systemPrompt: string;
   knownTools: ToolSpec[];
   onStartRename: () => void;
@@ -29,6 +32,31 @@ interface RenderSessionInfoStackOptions {
 }
 
 const PROMPT_PREVIEW_LINES = 10;
+
+function formatCompactCount(value: number): string {
+  if (!Number.isFinite(value) || value === 0) return "0";
+  return new Intl.NumberFormat("en-US", {
+    notation: "compact",
+    maximumFractionDigits: 1,
+  }).format(Math.max(0, value));
+}
+
+function formatHistoryRow(stats: SessionMessageStats, totalTokens: number): string {
+  const tokens = totalTokens > 0 ? ` \u00b7 ${formatCompactCount(totalTokens)} tokens` : "";
+  return `${stats.totalMessages} messages${tokens}`;
+}
+
+function formatContextRow(
+  contextMessageCount: number,
+  activeContextTokens: number | null,
+  contextWindow: number | null,
+): string {
+  if (contextWindow && contextWindow > 0 && activeContextTokens !== null) {
+    const pct = Math.min(100, Math.max(0, (activeContextTokens / contextWindow) * 100));
+    return `${contextMessageCount} messages \u00b7 ${pct.toFixed(1)}% of ${formatCompactCount(contextWindow)}`;
+  }
+  return `${contextMessageCount} messages`;
+}
 
 export function renderSessionInfoStack({
   sessionId,
@@ -40,8 +68,11 @@ export function renderSessionInfoStack({
   modelLabel,
   thinkingLevel,
   stats,
-  persistedMessageCount,
+  persistedMessageStats,
   pendingMessageCount,
+  usage,
+  currentContextWindow,
+  contextMessageCount,
   systemPrompt,
   knownTools,
   onStartRename,
@@ -88,12 +119,15 @@ export function renderSessionInfoStack({
           <div class="cv-info-item"><span>Thinking</span><strong>${thinkingLevel}</strong></div>
           <div class="cv-info-item">
             <span>Messages</span>
-            <strong>${stats.userMessages} user, ${stats.assistantMessages} assistant, ${stats.toolResults} tool</strong>
+            <strong>${stats.userMessages} user &middot; ${stats.assistantMessages} assistant &middot; ${stats.toolCalls} tool calls</strong>
           </div>
-          <div class="cv-info-item"><span>Tool Calls</span><strong>${stats.toolCalls}</strong></div>
           <div class="cv-info-item">
-            <span>Persisted</span>
-            <strong>${persistedMessageCount}${pendingMessageCount ? ` (+${pendingMessageCount} pending)` : ""}</strong>
+            <span>History</span>
+            <strong>${formatHistoryRow(persistedMessageStats, usage.input + usage.output)}</strong>
+          </div>
+          <div class="cv-info-item">
+            <span>Context</span>
+            <strong>${formatContextRow(contextMessageCount, usage.activeContextTokens, currentContextWindow)}</strong>
           </div>
         </div>
       </div>
