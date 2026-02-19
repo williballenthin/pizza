@@ -29,15 +29,6 @@ interface CachedParsedSessionFile {
   size: number;
 }
 
-export class SessionBusyError extends Error {
-  constructor(sessionId: string) {
-    super(
-      `Session ${sessionId} was updated recently but has no local activity. It is likely owned by another pi instance.`,
-    );
-    this.name = "SessionBusyError";
-  }
-}
-
 export class SessionManager {
   private active = new Map<string, ActiveSession>();
   private fileCache = new Map<string, CachedParsedSessionFile>();
@@ -151,10 +142,6 @@ export class SessionManager {
   ): Promise<SessionMeta | null> {
     if (updates.name === undefined) return null;
 
-    if (await this.isLikelyOwnedElsewhere(id)) {
-      throw new SessionBusyError(id);
-    }
-
     const active = this.active.get(id);
     if (active && active.rpc.alive) {
       await active.rpc.sendAndWait({
@@ -189,10 +176,6 @@ export class SessionManager {
   }
 
   async deleteSession(id: string): Promise<boolean> {
-    if (await this.isLikelyOwnedElsewhere(id)) {
-      throw new SessionBusyError(id);
-    }
-
     const active = this.active.get(id);
     if (active) {
       active.rpc.stop();
@@ -231,10 +214,6 @@ export class SessionManager {
       entry.clients.add(listener);
       this.noteClientActivity(sessionId);
       return entry.rpc;
-    }
-
-    if (await this.isLikelyOwnedElsewhere(sessionId)) {
-      throw new SessionBusyError(sessionId);
     }
 
     const sessionFile = await this.findSessionFile(sessionId);
@@ -483,7 +462,6 @@ export class SessionManager {
     const idle = activeHere && !attached && hasRecentClientActivity;
     const warm = !activeHere && hasRecentClientActivity;
     const recentlyUpdated = this.isRecentlyUpdated(meta.lastActivityAt, now);
-    const muted = recentlyUpdated && !activeHere && !hasRecentClientActivity;
 
     const state: SessionActivityState = attached
       ? "attached"
@@ -493,9 +471,7 @@ export class SessionManager {
           ? "active_here"
           : warm
             ? "warm"
-            : muted
-              ? "recently_edited_elsewhere"
-              : "inactive";
+            : "inactive";
 
     return {
       state,
@@ -505,7 +481,6 @@ export class SessionManager {
       warm,
       hasRecentClientActivity,
       recentlyUpdated,
-      muted,
     };
   }
 
@@ -537,22 +512,6 @@ export class SessionManager {
     }
   }
 
-  private async isLikelyOwnedElsewhere(sessionId: string): Promise<boolean> {
-    const now = Date.now();
-
-    const activeEntry = this.active.get(sessionId);
-    if (activeEntry?.rpc.alive) return false;
-
-    if (this.hasRecentClientActivity(sessionId, now)) return false;
-
-    const sessionFile = await this.findSessionFile(sessionId);
-    if (!sessionFile) return false;
-
-    const parsed = await this.parseSessionFile(sessionFile);
-    if (!parsed) return false;
-
-    return this.isRecentlyUpdated(parsed.lastActivityAt, now);
-  }
 }
 
 function fallbackName(id: string): string {

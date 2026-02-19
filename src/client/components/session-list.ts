@@ -114,16 +114,6 @@ export class SessionList extends LitElement {
       font-weight: 500;
     }
 
-    .session-item.muted {
-      opacity: 0.56;
-      cursor: not-allowed;
-    }
-
-    .session-item.muted:hover,
-    .session-item.muted:active {
-      background: transparent;
-    }
-
     .session-main {
       padding-right: 34px;
     }
@@ -186,20 +176,9 @@ export class SessionList extends LitElement {
       color: #b45309;
     }
 
-    .session-activity-badge.recently_edited_elsewhere {
-      border-color: rgba(220, 38, 38, 0.45);
-      color: var(--error);
-    }
-
     .session-meta {
       font-size: 0.85rem;
       color: var(--text-secondary);
-    }
-
-    .session-muted-reason {
-      margin-top: 4px;
-      font-size: 0.78rem;
-      color: var(--error);
     }
 
     .session-menu-btn {
@@ -228,11 +207,6 @@ export class SessionList extends LitElement {
       background: var(--surface-alt);
       color: var(--text-primary);
       outline: none;
-    }
-
-    .session-menu-btn:disabled {
-      cursor: not-allowed;
-      opacity: 0.35;
     }
 
     .rename-input {
@@ -309,12 +283,6 @@ export class SessionList extends LitElement {
       background: var(--surface-alt);
     }
 
-    .context-menu button:disabled {
-      opacity: 0.45;
-      cursor: not-allowed;
-      background: transparent;
-    }
-
     .context-menu .danger {
       color: var(--error);
     }
@@ -359,8 +327,6 @@ export class SessionList extends LitElement {
 
   private openSession(id: string) {
     if (this.renamingId || this.contextMenuSessionId) return;
-    const session = this.sessions.find((s) => s.id === id);
-    if (!session || this.isSessionMuted(session)) return;
     window.location.hash = `#/session/${id}`;
   }
 
@@ -376,15 +342,11 @@ export class SessionList extends LitElement {
   }
 
   private onContextMenu(e: MouseEvent, id: string) {
-    const session = this.sessions.find((s) => s.id === id);
-    if (!session || this.isSessionMuted(session)) return;
     e.preventDefault();
     this.showContextMenu(id, e.clientX, e.clientY);
   }
 
   private onTouchStart(e: TouchEvent, id: string) {
-    const session = this.sessions.find((s) => s.id === id);
-    if (!session || this.isSessionMuted(session)) return;
     const touch = e.touches[0];
     this.longPressTimer = setTimeout(() => {
       this.showContextMenu(id, touch.clientX, touch.clientY);
@@ -399,8 +361,6 @@ export class SessionList extends LitElement {
   }
 
   private openMenuFromButton(e: MouseEvent, id: string) {
-    const session = this.sessions.find((s) => s.id === id);
-    if (!session || this.isSessionMuted(session)) return;
     e.preventDefault();
     e.stopPropagation();
     const target = e.currentTarget as HTMLElement;
@@ -418,7 +378,7 @@ export class SessionList extends LitElement {
   private async toggleArchive() {
     const session = this.getContextSession();
     this.closeContextMenu();
-    if (!session || this.isSessionMuted(session)) return;
+    if (!session) return;
 
     const archived = isArchivedSessionName(session.name);
     const name = archived
@@ -445,7 +405,7 @@ export class SessionList extends LitElement {
     const session = this.sessions.find(
       (s) => s.id === this.contextMenuSessionId,
     );
-    if (session && !this.isSessionMuted(session)) {
+    if (session) {
       this.renamingId = session.id;
       this.renameValue = session.name;
     }
@@ -489,7 +449,7 @@ export class SessionList extends LitElement {
   private async deleteSession() {
     const session = this.getContextSession();
     this.closeContextMenu();
-    if (!session || this.isSessionMuted(session)) return;
+    if (!session) return;
     if (!confirm("Delete this session?")) return;
 
     try {
@@ -538,25 +498,15 @@ export class SessionList extends LitElement {
               class="context-menu"
               style="left:${this.contextMenuPos.x}px;top:${this.contextMenuPos.y}px"
             >
-              <button
-                ?disabled=${this.isSessionMuted(this.getContextSession())}
-                @click=${this.toggleArchive}
-              >
+              <button @click=${this.toggleArchive}>
                 ${isArchivedSessionName(this.getContextSession()?.name || "")
                   ? "Unarchive"
                   : "Archive"}
               </button>
-              <button
-                ?disabled=${this.isSessionMuted(this.getContextSession())}
-                @click=${this.startRename}
-              >
+              <button @click=${this.startRename}>
                 Rename
               </button>
-              <button
-                class="danger"
-                ?disabled=${this.isSessionMuted(this.getContextSession())}
-                @click=${this.deleteSession}
-              >
+              <button class="danger" @click=${this.deleteSession}>
                 Delete
               </button>
             </div>
@@ -568,17 +518,13 @@ export class SessionList extends LitElement {
   private renderSession(s: SessionMeta) {
     const isRenaming = this.renamingId === s.id;
     const archived = isArchivedSessionName(s.name);
-    const muted = this.isSessionMuted(s);
-    const mutedReason = this.getMutedReason(s);
     const activity = this.getActivityPresentation(
       s.activity?.state ?? "inactive",
     );
 
     return html`
       <div
-        class="session-item ${archived ? "archived" : ""} ${muted ? "muted" : ""}"
-        title=${mutedReason ?? ""}
-        aria-label=${mutedReason ?? this.getSessionDisplayName(s)}
+        class="session-item ${archived ? "archived" : ""}"
         @click=${() => this.openSession(s.id)}
         @contextmenu=${(e: MouseEvent) => this.onContextMenu(e, s.id)}
         @touchstart=${(e: TouchEvent) => this.onTouchStart(e, s.id)}
@@ -616,15 +562,11 @@ export class SessionList extends LitElement {
           <div class="session-meta">
             ${s.messageCount} messages &middot; ${relativeTime(s.lastActivityAt)}
           </div>
-          ${mutedReason
-            ? html`<div class="session-muted-reason">${mutedReason}</div>`
-            : nothing}
         </div>
         <button
           class="session-menu-btn"
           title="Session actions"
           aria-label="Session actions"
-          ?disabled=${muted}
           @click=${(e: MouseEvent) => this.openMenuFromButton(e, s.id)}
         >
           ⋯
@@ -639,18 +581,6 @@ export class SessionList extends LitElement {
       : session.name;
   }
 
-  private isSessionMuted(session: SessionMeta | undefined): boolean {
-    return !!session?.activity?.muted;
-  }
-
-  private getMutedReason(session: SessionMeta | undefined): string | null {
-    if (!session || !this.isSessionMuted(session)) return null;
-    if (session.activity?.state === "recently_edited_elsewhere") {
-      return "Updated recently but with no local activity. Likely in use by another Pi instance.";
-    }
-    return "Session is currently unavailable from this instance.";
-  }
-
   private getActivityPresentation(
     state: SessionActivityState,
   ): { label: string; className: string } | null {
@@ -661,8 +591,6 @@ export class SessionList extends LitElement {
         return { label: "Idle", className: "idle" };
       case "warm":
         return { label: "Warm", className: "warm" };
-      case "recently_edited_elsewhere":
-        return { label: "In use elsewhere", className: "recently_edited_elsewhere" };
       case "active_here":
         return { label: "Active here", className: "active_here" };
       default:

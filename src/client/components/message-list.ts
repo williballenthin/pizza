@@ -179,14 +179,39 @@ export class MessageList extends LitElement {
     renderIndex: number,
   ): TemplateResult {
     const ts = formatTimestamp(message.timestamp);
-    const text = this.extractText(message.content);
+    const text = this.extractText(message.content).trim();
     const targetId = this.targetId(renderIndex);
+    const images = this.asBlocks(message.content).filter(
+      (part) =>
+        part.type === "image" &&
+        typeof part.data === "string" &&
+        part.data.length > 0,
+    );
 
     return html`
       <div class="user-message ml-user" id=${targetId}>
         ${this.renderCopyButton(targetId)}
         ${ts ? html`<div class="message-timestamp">${ts}</div>` : nothing}
-        <div class="markdown-content">${unsafeHTML(safeMarkedParse(text))}</div>
+
+        ${text
+          ? html`<div class="markdown-content">${unsafeHTML(safeMarkedParse(text))}</div>`
+          : nothing}
+
+        ${images.length > 0
+          ? html`<div class="user-images">
+              ${images.map((img) => {
+                const mimeType = img.mimeType || "image/png";
+                const data = typeof img.data === "string" ? img.data : "";
+                if (!data) return nothing;
+                return html`<img
+                  src=${`data:${mimeType};base64,${data}`}
+                  class="user-image"
+                  alt="User attachment"
+                  loading="lazy"
+                />`;
+              })}
+            </div>`
+          : nothing}
       </div>
     `;
   }

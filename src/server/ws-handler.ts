@@ -1,13 +1,14 @@
 import { spawn, type ChildProcess } from "child_process";
 import type { WebSocket } from "ws";
 import type { RpcProcess } from "./rpc-process.js";
-import { SessionBusyError, type SessionManager } from "./session-manager.js";
+import type { SessionManager } from "./session-manager.js";
 import type {
   ClientMessage,
   RpcEvent,
   ServerMessage,
   ModelInfo,
   SlashCommandSpec,
+  ImageContent,
 } from "@shared/types.js";
 
 type PendingCommand =
@@ -21,9 +22,12 @@ interface LocalShellRun {
   command: string;
   proc: ChildProcess;
   promise: Promise<LocalShellResult>;
+  aborted: boolean;
 }
 
 const LOCAL_SHELL_MAX_OUTPUT_BYTES = 50 * 1024;
+const MAX_CLIENT_IMAGES_PER_MESSAGE = 6;
+const MAX_CLIENT_IMAGE_BYTES = 10 * 1024 * 1024;
 
 export async function handleSessionWebSocket(
   ws: WebSocket,
@@ -214,13 +218,9 @@ export async function handleSessionWebSocket(
     rpc = await sessions.getOrSpawn(sessionId, listener);
   } catch (err) {
     const message =
-      err instanceof SessionBusyError
-        ? err.message
-        : err instanceof Error
-          ? err.message
-          : "Failed to open session";
+      err instanceof Error ? err.message : "Failed to open session";
     sendJson(ws, { type: "error", message });
-    ws.close(err instanceof SessionBusyError ? 1008 : 1011, "Session unavailable");
+    ws.close(1011, "Session unavailable");
     return;
   }
 
@@ -241,31 +241,60 @@ export async function handleSessionWebSocket(
         rpc = await sessions.getOrSpawn(sessionId, listener);
       } catch (err) {
         const message =
-          err instanceof SessionBusyError
-            ? err.message
-            : err instanceof Error
-              ? err.message
-              : "Failed to open session";
+          err instanceof Error ? err.message : "Failed to open session";
         sendJson(ws, { type: "error", message });
-        if (err instanceof SessionBusyError) {
-          ws.close(1008, "Session unavailable");
-        }
         return;
       }
     }
 
     switch (msg.type) {
-      case "prompt":
-        rpc.send({ type: "prompt", message: msg.text });
+      case "prompt": {
+        try {
+          const images = normalizeClientImages(msg.images);
+          rpc.send({ type: "prompt", message: msg.text, images });
+        } catch (err) {
+          sendJson(ws, {
+            type: "error",
+            message:
+              err instanceof Error
+                ? err.message
+                : "Invalid image attachment payload",
+          });
+        }
         break;
+      }
 
-      case "steer":
-        rpc.send({ type: "steer", message: msg.text });
+      case "steer": {
+        try {
+          const images = normalizeClientImages(msg.images);
+          rpc.send({ type: "steer", message: msg.text, images });
+        } catch (err) {
+          sendJson(ws, {
+            type: "error",
+            message:
+              err instanceof Error
+                ? err.message
+                : "Invalid image attachment payload",
+          });
+        }
         break;
+      }
 
-      case "follow_up":
-        rpc.send({ type: "follow_up", message: msg.text });
+      case "follow_up": {
+        try {
+          const images = normalizeClientImages(msg.images);
+          rpc.send({ type: "follow_up", message: msg.text, images });
+        } catch (err) {
+          sendJson(ws, {
+            type: "error",
+            message:
+              err instanceof Error
+                ? err.message
+                : "Invalid image attachment payload",
+          });
+        }
         break;
+      }
 
       case "bash": {
         const command = msg.command.trim();
@@ -296,11 +325,13 @@ export async function handleSessionWebSocket(
 
         try {
           const run = startLocalShell(command, sessions.cwd);
-          runningLocalShell = {
+          const localRun: LocalShellRun = {
             command,
             proc: run.proc,
             promise: run.promise,
+            aborted: false,
           };
+          runningLocalShell = localRun;
 
           run.promise
             .then((result) => {
@@ -310,7 +341,7 @@ export async function handleSessionWebSocket(
                 includeInContext: false,
                 output: result.output,
                 exitCode: result.exitCode,
-                cancelled: result.cancelled,
+                cancelled: result.cancelled || localRun.aborted,
                 truncated: result.truncated,
                 timestamp: Date.now(),
               });
@@ -344,6 +375,7 @@ export async function handleSessionWebSocket(
       case "abort_bash": {
         rpc.send({ type: "abort_bash" });
         if (runningLocalShell) {
+          runningLocalShell.aborted = true;
           runningLocalShell.proc.kill("SIGTERM");
         }
         break;
@@ -409,6 +441,7 @@ export async function handleSessionWebSocket(
 
   ws.on("close", () => {
     if (runningLocalShell) {
+      runningLocalShell.aborted = true;
       runningLocalShell.proc.kill("SIGTERM");
       runningLocalShell = null;
     }
@@ -417,6 +450,7 @@ export async function handleSessionWebSocket(
 
   ws.on("error", () => {
     if (runningLocalShell) {
+      runningLocalShell.aborted = true;
       runningLocalShell.proc.kill("SIGTERM");
       runningLocalShell = null;
     }
@@ -429,6 +463,62 @@ interface LocalShellResult {
   exitCode?: number;
   cancelled: boolean;
   truncated: boolean;
+}
+
+function normalizeClientImages(images: unknown): ImageContent[] | undefined {
+  if (images == null) return undefined;
+  if (!Array.isArray(images)) {
+    throw new Error("Invalid image payload.");
+  }
+  if (images.length === 0) return undefined;
+  if (images.length > MAX_CLIENT_IMAGES_PER_MESSAGE) {
+    throw new Error(
+      `Too many images. Maximum ${MAX_CLIENT_IMAGES_PER_MESSAGE} images per message.`,
+    );
+  }
+
+  const normalized: ImageContent[] = [];
+
+  for (const image of images) {
+    if (!image || typeof image !== "object") {
+      throw new Error("Invalid image payload.");
+    }
+
+    const raw = image as Record<string, unknown>;
+    if (raw.type !== "image") {
+      throw new Error("Invalid image payload.");
+    }
+
+    const mimeType =
+      typeof raw.mimeType === "string" ? raw.mimeType.trim() : "";
+    if (!mimeType.startsWith("image/")) {
+      throw new Error("Unsupported image type.");
+    }
+
+    const data = typeof raw.data === "string" ? raw.data.trim() : "";
+    if (!data || !isLikelyBase64(data)) {
+      throw new Error("Invalid image data.");
+    }
+
+    if (estimateBase64Bytes(data) > MAX_CLIENT_IMAGE_BYTES) {
+      throw new Error(
+        `Image too large. Maximum size is ${Math.round(MAX_CLIENT_IMAGE_BYTES / 1024 / 1024)}MB.`,
+      );
+    }
+
+    normalized.push({ type: "image", data, mimeType });
+  }
+
+  return normalized.length > 0 ? normalized : undefined;
+}
+
+function isLikelyBase64(value: string): boolean {
+  return /^[A-Za-z0-9+/]+={0,2}$/.test(value);
+}
+
+function estimateBase64Bytes(base64: string): number {
+  const padding = base64.endsWith("==") ? 2 : base64.endsWith("=") ? 1 : 0;
+  return Math.floor((base64.length * 3) / 4) - padding;
 }
 
 function startLocalShell(command: string, cwd: string): {

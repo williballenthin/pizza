@@ -11,6 +11,7 @@ import type {
   QueueDeliveryMode,
   ExtensionUIRequest,
   ShellResultMessage,
+  ImageContent,
 } from "@shared/types.js";
 import {
   routeInputText,
@@ -64,6 +65,11 @@ interface SessionStats {
   toolResults: number;
   toolCalls: number;
   totalVisible: number;
+}
+
+interface InputSubmission {
+  text: string;
+  images?: ImageContent[];
 }
 
 @customElement("chat-view")
@@ -717,20 +723,23 @@ export class ChatView extends LitElement {
 
   // ---- User actions ----
 
-  private onSend(e: CustomEvent<string>) {
-    this.routeAndSubmitText(e.detail, "send");
+  private onSend(e: CustomEvent<InputSubmission>) {
+    this.routeAndSubmitInput(e.detail, "send");
   }
 
-  private onSteer(e: CustomEvent<string>) {
-    this.routeAndSubmitText(e.detail, "steer");
+  private onSteer(e: CustomEvent<InputSubmission>) {
+    this.routeAndSubmitInput(e.detail, "steer");
   }
 
-  private onFollowUp(e: CustomEvent<string>) {
-    this.routeAndSubmitText(e.detail, "follow_up");
+  private onFollowUp(e: CustomEvent<InputSubmission>) {
+    this.routeAndSubmitInput(e.detail, "follow_up");
   }
 
-  private routeAndSubmitText(text: string, intent: SubmitIntent) {
-    const slashName = parseSlashCommandName(text);
+  private routeAndSubmitInput(input: InputSubmission, intent: SubmitIntent) {
+    const text = typeof input.text === "string" ? input.text : "";
+    const images = this.normalizeImages(input.images);
+    const slashName = text.trim() ? parseSlashCommandName(text.trim()) : null;
+
     if (slashName && this.commands.length === 0 && !this.commandsLoading) {
       this.requestCommands(true);
     }
@@ -750,6 +759,7 @@ export class ChatView extends LitElement {
       intent,
       isStreaming: this.isStreaming,
       commands: this.commands,
+      allowEmpty: images.length > 0,
     });
 
     switch (routed.kind) {
@@ -761,6 +771,12 @@ export class ChatView extends LitElement {
         return;
 
       case "bash":
+        if (images.length > 0) {
+          this.pushExtensionNotification(
+            "Image attachments are ignored for shell commands.",
+            "warning",
+          );
+        }
         this._lastStreamClone = null;
         this.shouldAutoScroll = true;
         this.wsSend({
@@ -773,34 +789,70 @@ export class ChatView extends LitElement {
 
       case "prompt":
         void this.unarchiveSessionIfNeeded();
-        this.appendUserMessage(routed.text);
-        this.wsSend({ type: "prompt", text: routed.text });
+        this.appendUserMessage(routed.text, images);
+        this.wsSend({
+          type: "prompt",
+          text: routed.text,
+          images: images.length > 0 ? images : undefined,
+        });
         return;
 
       case "steer":
         void this.unarchiveSessionIfNeeded();
         this.wasInterrupted = true;
         this.finalizeStreaming();
-        this.appendUserMessage(routed.text);
-        this.wsSend({ type: "steer", text: routed.text });
+        this.appendUserMessage(routed.text, images);
+        this.wsSend({
+          type: "steer",
+          text: routed.text,
+          images: images.length > 0 ? images : undefined,
+        });
         return;
 
       case "follow_up":
         void this.unarchiveSessionIfNeeded();
-        this.appendUserMessage(routed.text);
-        this.wsSend({ type: "follow_up", text: routed.text });
+        this.appendUserMessage(routed.text, images);
+        this.wsSend({
+          type: "follow_up",
+          text: routed.text,
+          images: images.length > 0 ? images : undefined,
+        });
         return;
     }
   }
 
-  private appendUserMessage(text: string) {
+  private appendUserMessage(text: string, images: ImageContent[] = []) {
+    let content: unknown = text;
+
+    if (images.length > 0) {
+      const blocks: Array<{ type: "text"; text: string } | ImageContent> = [];
+      if (text) {
+        blocks.push({ type: "text", text });
+      }
+      blocks.push(...images);
+      content = blocks;
+    }
+
     this.messages = [
       ...this.messages,
-      { role: "user", content: text, timestamp: Date.now() } as AgentMessageData,
+      { role: "user", content, timestamp: Date.now() } as AgentMessageData,
     ];
     this._lastStreamClone = null;
     this.shouldAutoScroll = true;
     this.scheduleScroll();
+  }
+
+  private normalizeImages(images: ImageContent[] | undefined): ImageContent[] {
+    if (!Array.isArray(images)) return [];
+    return images.filter(
+      (img) =>
+        !!img &&
+        img.type === "image" &&
+        typeof img.data === "string" &&
+        img.data.length > 0 &&
+        typeof img.mimeType === "string" &&
+        img.mimeType.startsWith("image/"),
+    );
   }
 
   private onStop() {
@@ -1083,6 +1135,7 @@ export class ChatView extends LitElement {
         if (p.type === "thinking" && typeof p.thinking === "string") {
           return p.thinking;
         }
+        if (p.type === "image") return "[image]";
         return "";
       })
       .join(" ")

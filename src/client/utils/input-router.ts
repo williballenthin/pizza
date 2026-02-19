@@ -15,6 +15,7 @@ export interface RouteInputOptions {
   isStreaming: boolean;
   commands?: SlashCommandSpec[];
   localCommandNames?: Iterable<string>;
+  allowEmpty?: boolean;
 }
 
 export function routeInputText(
@@ -22,7 +23,7 @@ export function routeInputText(
   options: RouteInputOptions,
 ): RoutedInput {
   const text = rawText.trim();
-  if (!text) return { kind: "none" };
+  if (!text && !options.allowEmpty) return { kind: "none" };
 
   const bangBang = parseBangCommand(text, "!!");
   if (bangBang) {

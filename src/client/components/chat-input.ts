@@ -1,6 +1,14 @@
 import { LitElement, html, css, nothing } from "lit";
 import { customElement, property, state, query } from "lit/decorators.js";
-import type { SlashCommandSpec } from "@shared/types.js";
+import type { SlashCommandSpec, ImageContent } from "@shared/types.js";
+
+const MAX_PASTED_IMAGES = 6;
+const MAX_PASTED_IMAGE_BYTES = 10 * 1024 * 1024;
+
+export interface ChatInputSubmitDetail {
+  text: string;
+  images: ImageContent[];
+}
 
 @customElement("chat-input")
 export class ChatInput extends LitElement {
@@ -11,6 +19,10 @@ export class ChatInput extends LitElement {
 
   @state() private text = "";
   @state() private selectedCommandIndex = 0;
+  @state() private pastedImages: ImageContent[] = [];
+  @state() private attachmentError = "";
+  @state() private processingPaste = false;
+  @state() private isDragOver = false;
 
   @query("textarea") private textarea!: HTMLTextAreaElement;
 
@@ -42,6 +54,55 @@ export class ChatInput extends LitElement {
       min-width: 0;
     }
 
+    .attachments {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 8px;
+    }
+
+    .attachment {
+      width: 72px;
+      height: 72px;
+      border-radius: 6px;
+      overflow: hidden;
+      border: 1px solid var(--borderMuted, #505050);
+      position: relative;
+      background: var(--bg);
+    }
+
+    .attachment img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    .attachment-remove {
+      position: absolute;
+      top: 4px;
+      right: 4px;
+      width: 18px;
+      height: 18px;
+      border: 1px solid rgba(255, 255, 255, 0.6);
+      border-radius: 999px;
+      background: rgba(0, 0, 0, 0.65);
+      color: #fff;
+      font-size: 12px;
+      line-height: 1;
+      cursor: pointer;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
+    }
+
+    .attachment-error {
+      margin-bottom: 8px;
+      color: var(--error);
+      font-size: 11px;
+    }
+
     textarea {
       width: 100%;
       min-height: 40px;
@@ -66,6 +127,12 @@ export class ChatInput extends LitElement {
     textarea:focus {
       border-color: var(--borderAccent, #00d7ff);
       box-shadow: 0 0 0 1px rgba(0, 215, 255, 0.25);
+    }
+
+    textarea.drag-over {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 1px rgba(0, 215, 255, 0.25);
+      background: rgba(0, 215, 255, 0.06);
     }
 
     textarea:disabled {
@@ -233,7 +300,34 @@ export class ChatInput extends LitElement {
               `
             : nothing}
 
+          ${this.attachmentError
+            ? html`<div class="attachment-error">${this.attachmentError}</div>`
+            : nothing}
+
+          ${this.pastedImages.length > 0
+            ? html`<div class="attachments">
+                ${this.pastedImages.map(
+                  (img, index) => html`
+                    <div class="attachment" title=${img.mimeType}>
+                      <img
+                        src=${`data:${img.mimeType};base64,${img.data}`}
+                        alt="Pasted image"
+                      />
+                      <button
+                        class="attachment-remove"
+                        title="Remove image"
+                        @click=${() => this.removeImage(index)}
+                      >
+                        ×
+                      </button>
+                    </div>
+                  `,
+                )}
+              </div>`
+            : nothing}
+
           <textarea
+            class=${this.isDragOver ? "drag-over" : ""}
             placeholder=${this.disabled
               ? "No model available"
               : "Type a message… (!cmd, !!cmd, /command)"}
@@ -242,6 +336,10 @@ export class ChatInput extends LitElement {
             ?disabled=${this.disabled}
             @input=${this.onInput}
             @keydown=${this.onKeydown}
+            @paste=${this.onPaste}
+            @dragover=${this.onDragOver}
+            @dragleave=${this.onDragLeave}
+            @drop=${this.onDrop}
           ></textarea>
         </div>
 
@@ -255,7 +353,11 @@ export class ChatInput extends LitElement {
               <button
                 class="send-btn send"
                 @click=${this.onSend}
-                ?disabled=${this.disabled || !this.text.trim()}
+                ?disabled=${
+                  this.disabled ||
+                  this.processingPaste ||
+                  (!this.text.trim() && this.pastedImages.length === 0)
+                }
                 title="Send"
               >
                 &#9654;
@@ -269,6 +371,8 @@ export class ChatInput extends LitElement {
         ${this.isStreaming
           ? html`<span>Alt+Enter: follow-up</span>`
           : nothing}
+        <span>Cmd/Ctrl+V: paste image</span>
+        <span>Drag & drop: image attach</span>
         <span>!cmd: shell + context</span>
         <span>!!cmd: shell only</span>
         <span
@@ -325,18 +429,31 @@ export class ChatInput extends LitElement {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
 
-      if (this.isStreaming) {
-        if (!this.text.trim()) return;
+      if (this.processingPaste) return;
 
+      const detail = this.buildSubmitDetail();
+      if (!detail) return;
+
+      if (this.isStreaming) {
         if (e.altKey) {
           this.dispatchEvent(
-            new CustomEvent("follow-up", { detail: this.text.trim() }),
+            new CustomEvent<ChatInputSubmitDetail>("follow-up", {
+              detail,
+              bubbles: true,
+              composed: true,
+            }),
           );
           this.clear();
           return;
         }
 
-        this.dispatchEvent(new CustomEvent("steer", { detail: this.text.trim() }));
+        this.dispatchEvent(
+          new CustomEvent<ChatInputSubmitDetail>("steer", {
+            detail,
+            bubbles: true,
+            composed: true,
+          }),
+        );
         this.clear();
         return;
       }
@@ -346,19 +463,143 @@ export class ChatInput extends LitElement {
   }
 
   private onSend() {
-    const text = this.text.trim();
-    if (!text) return;
-    this.dispatchEvent(new CustomEvent("send", { detail: text }));
+    if (this.processingPaste) return;
+    const detail = this.buildSubmitDetail();
+    if (!detail) return;
+
+    this.dispatchEvent(
+      new CustomEvent<ChatInputSubmitDetail>("send", {
+        detail,
+        bubbles: true,
+        composed: true,
+      }),
+    );
     this.clear();
   }
 
   private onStop() {
-    this.dispatchEvent(new CustomEvent("stop"));
+    this.dispatchEvent(
+      new CustomEvent("stop", { bubbles: true, composed: true }),
+    );
+  }
+
+  private async onPaste(e: ClipboardEvent) {
+    if (this.disabled) return;
+
+    const imageFiles = this.extractImageFilesFromClipboard(e.clipboardData);
+    if (imageFiles.length === 0) return;
+
+    e.preventDefault();
+    await this.addImageFiles(imageFiles);
+  }
+
+  private onDragOver(e: DragEvent) {
+    if (this.disabled) return;
+    const transfer = e.dataTransfer;
+    if (!transfer || !this.hasFileTransfer(transfer)) return;
+
+    e.preventDefault();
+    transfer.dropEffect = "copy";
+    if (!this.isDragOver) {
+      this.isDragOver = true;
+    }
+  }
+
+  private onDragLeave() {
+    this.isDragOver = false;
+  }
+
+  private async onDrop(e: DragEvent) {
+    this.isDragOver = false;
+
+    if (this.disabled) return;
+    const transfer = e.dataTransfer;
+    if (!transfer || !this.hasFileTransfer(transfer)) return;
+
+    e.preventDefault();
+
+    const imageFiles = this.extractImageFilesFromTransfer(transfer);
+    if (imageFiles.length === 0) {
+      this.attachmentError = "Only image files can be attached.";
+      return;
+    }
+
+    await this.addImageFiles(imageFiles);
+  }
+
+  private extractImageFilesFromClipboard(data: DataTransfer | null): File[] {
+    if (!data?.items) return [];
+
+    const files: File[] = [];
+    for (let i = 0; i < data.items.length; i++) {
+      const item = data.items[i];
+      if (item.kind === "file" && item.type.startsWith("image/")) {
+        const file = item.getAsFile();
+        if (file) files.push(file);
+      }
+    }
+
+    return files;
+  }
+
+  private hasFileTransfer(transfer: DataTransfer): boolean {
+    return Array.from(transfer.types || []).includes("Files");
+  }
+
+  private extractImageFilesFromTransfer(transfer: DataTransfer): File[] {
+    return Array.from(transfer.files || []).filter((file) =>
+      file.type.startsWith("image/"),
+    );
+  }
+
+  private async addImageFiles(files: File[]) {
+    this.attachmentError = "";
+
+    const remainingSlots = MAX_PASTED_IMAGES - this.pastedImages.length;
+    if (remainingSlots <= 0) {
+      this.attachmentError = `Maximum ${MAX_PASTED_IMAGES} images per message.`;
+      return;
+    }
+
+    const filesToProcess = files.slice(0, remainingSlots);
+    if (files.length > filesToProcess.length) {
+      this.attachmentError = `Only ${MAX_PASTED_IMAGES} images allowed per message.`;
+    }
+
+    this.processingPaste = true;
+    const nextImages = [...this.pastedImages];
+
+    try {
+      for (const file of filesToProcess) {
+        if (file.size > MAX_PASTED_IMAGE_BYTES) {
+          this.attachmentError = `Image too large. Max size is ${Math.round(MAX_PASTED_IMAGE_BYTES / 1024 / 1024)}MB.`;
+          continue;
+        }
+
+        try {
+          const base64 = await this.fileToBase64(file);
+          nextImages.push({
+            type: "image",
+            data: base64,
+            mimeType: file.type || "image/png",
+          });
+        } catch {
+          this.attachmentError = "Failed to read image attachment.";
+        }
+      }
+
+      this.pastedImages = nextImages;
+    } finally {
+      this.processingPaste = false;
+    }
   }
 
   private clear() {
     this.text = "";
     this.selectedCommandIndex = 0;
+    this.pastedImages = [];
+    this.attachmentError = "";
+    this.isDragOver = false;
     if (this.textarea) {
       this.textarea.style.height = "auto";
     }
@@ -385,6 +626,18 @@ export class ChatInput extends LitElement {
     return this.text;
   }
 
+  private buildSubmitDetail(): ChatInputSubmitDetail | null {
+    const text = this.text.trim();
+    const images = [...this.pastedImages];
+    if (!text && images.length === 0) return null;
+    return { text, images };
+  }
+
+  private removeImage(index: number) {
+    this.pastedImages = this.pastedImages.filter((_, i) => i !== index);
+    this.attachmentError = "";
+  }
+
   private syncHeight(ta: HTMLTextAreaElement) {
     ta.style.height = "auto";
     ta.style.height = Math.min(ta.scrollHeight, 180) + "px";
@@ -406,6 +659,19 @@ export class ChatInput extends LitElement {
       const end = this.textarea.value.length;
       this.textarea.setSelectionRange(end, end);
     });
+  }
+
+  private async fileToBase64(file: File): Promise<string> {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    let binary = "";
+    const chunkSize = 0x8000;
+
+    for (let i = 0; i < bytes.length; i += chunkSize) {
+      const chunk = bytes.subarray(i, i + chunkSize);
+      binary += String.fromCharCode(...chunk);
+    }
+
+    return btoa(binary);
   }
 
   private get commandSuggestions(): SlashCommandSpec[] {

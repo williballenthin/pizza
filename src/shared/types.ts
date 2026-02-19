@@ -5,7 +5,6 @@ export type SessionActivityState =
   | "idle"
   | "active_here"
   | "warm"
-  | "recently_edited_elsewhere"
   | "inactive";
 
 export interface SessionActivity {
@@ -16,7 +15,6 @@ export interface SessionActivity {
   warm: boolean;
   hasRecentClientActivity: boolean;
   recentlyUpdated: boolean;
-  muted: boolean;
 }
 
 export interface SessionMeta {
@@ -50,10 +48,16 @@ export interface HealthResponse {
 
 // ---- WebSocket: client → server ----
 
+export interface ImageContent {
+  type: "image";
+  data: string;
+  mimeType: string;
+}
+
 export type ClientMessage =
-  | { type: "prompt"; text: string }
-  | { type: "steer"; text: string }
-  | { type: "follow_up"; text: string }
+  | { type: "prompt"; text: string; images?: ImageContent[] }
+  | { type: "steer"; text: string; images?: ImageContent[] }
+  | { type: "follow_up"; text: string; images?: ImageContent[] }
   | { type: "bash"; command: string; includeInContext?: boolean }
   | { type: "abort" }
   | { type: "abort_bash" }
