@@ -8,6 +8,8 @@ import type {
   ExtensionUIRequest,
   ImageContent,
   SessionMessageStats,
+  SessionMeta,
+  SessionActivityUpdate,
 } from "@shared/types.js";
 import { emptyMessageStats } from "@shared/session-stats.js";
 import {
@@ -33,7 +35,8 @@ import {
   unarchiveSessionIfNeeded,
 } from "../utils/session-actions.js";
 import { renderExtensionUiDialog } from "../utils/render-extension-ui-dialog.js";
-import { renderChatSidebar } from "../utils/render-chat-sidebar.js";
+import { renderChatSidebar, type ActiveSessionItem } from "../utils/render-chat-sidebar.js";
+import { isArchivedSessionName, unarchiveSessionName } from "@shared/session-archive.js";
 import { renderSessionInfoStack } from "../utils/render-session-info-stack.js";
 import {
   renderChatEditorFooter,
@@ -95,11 +98,15 @@ export class ChatView extends LitElement {
   @state() private extensionStatuses: ExtensionStatusEntry[] = [];
   @state() private extensionWidgets: ExtensionWidgetEntry[] = [];
 
+  @state() private otherSessions: SessionMeta[] = [];
+
   private extensionUiState = new ExtensionUiState();
   private runtime: SessionRuntime | null = null;
   private scrollContainer: HTMLElement | null = null;
   private shouldAutoScroll = true;
   private pendingDeepLinkTarget = "";
+  private sessionsEventSource: EventSource | null = null;
+  private sessionsSSEHasConnected = false;
 
   // ---- Lifecycle ----
 
@@ -108,12 +115,15 @@ export class ChatView extends LitElement {
     this.updateDocumentTitle();
     this.pendingDeepLinkTarget = this.targetMessageId || "";
     this.bootstrapSessionRuntime();
+    this.loadOtherSessions();
+    this.connectSessionsSSE();
     window.addEventListener("keydown", this.onKeydown);
   }
 
   disconnectedCallback() {
     super.disconnectedCallback();
     this.cleanup();
+    this.disconnectSessionsSSE();
     window.removeEventListener("keydown", this.onKeydown);
   }
 
@@ -187,6 +197,69 @@ export class ChatView extends LitElement {
     this.hostCwd = "";
     this.hostGitBranch = "";
     this.persistedMessageStats = emptyMessageStats();
+  }
+
+  // ---- Other sessions (sidebar quick-links) ----
+
+  private async loadOtherSessions() {
+    try {
+      const res = await fetch("/api/sessions");
+      if (!res.ok) return;
+      const data = await res.json();
+      this.otherSessions = data.sessions;
+    } catch {
+      // silent — supplementary UI
+    }
+  }
+
+  private connectSessionsSSE() {
+    this.sessionsEventSource = new EventSource("/api/sessions/events");
+    this.sessionsSSEHasConnected = false;
+
+    this.sessionsEventSource.onopen = () => {
+      if (this.sessionsSSEHasConnected) {
+        this.loadOtherSessions();
+      }
+      this.sessionsSSEHasConnected = true;
+    };
+
+    this.sessionsEventSource.onmessage = (e) => {
+      const update: SessionActivityUpdate = JSON.parse(e.data);
+      const session = this.otherSessions.find((s) => s.id === update.sessionId);
+      if (session) {
+        session.activity = update.activity;
+        this.otherSessions = [...this.otherSessions];
+      } else {
+        this.loadOtherSessions();
+      }
+    };
+  }
+
+  private disconnectSessionsSSE() {
+    if (this.sessionsEventSource) {
+      this.sessionsEventSource.close();
+      this.sessionsEventSource = null;
+    }
+  }
+
+  private getActiveSessions(): ActiveSessionItem[] {
+    const oneHourAgo = Date.now() - 3_600_000;
+    return this.otherSessions
+      .filter(
+        (s) =>
+          s.id !== this.sessionId &&
+          !isArchivedSessionName(s.name) &&
+          s.activity?.state !== "inactive" &&
+          new Date(s.lastActivityAt).getTime() > oneHourAgo,
+      )
+      .map((s) => ({
+        id: s.id,
+        name: isArchivedSessionName(s.name)
+          ? unarchiveSessionName(s.name)
+          : s.name,
+        attached: s.activity?.attached ?? false,
+        activeHere: s.activity?.activeHere ?? false,
+      }));
   }
 
   private syncExtensionUiState() {
@@ -597,6 +670,7 @@ export class ChatView extends LitElement {
           search: this.sidebarSearch,
           filter: this.sidebarFilter,
           entries: sidebarEntries,
+          activeSessions: this.getActiveSessions(),
           onSearchInput: (e) => (this.sidebarSearch = (e.target as HTMLInputElement).value),
           onSelectFilter: (mode) => (this.sidebarFilter = mode),
           onFocusMessage: (targetId) => this.focusMessage(targetId),

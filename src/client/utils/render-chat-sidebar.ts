@@ -1,4 +1,4 @@
-import { html } from "lit";
+import { html, nothing } from "lit";
 
 type SidebarFilterMode = "default" | "no-tools" | "user-only" | "all";
 
@@ -10,10 +10,18 @@ interface SidebarEntry {
   targetId: string;
 }
 
+export interface ActiveSessionItem {
+  id: string;
+  name: string;
+  attached: boolean;
+  activeHere: boolean;
+}
+
 interface RenderChatSidebarOptions {
   search: string;
   filter: SidebarFilterMode;
   entries: SidebarEntry[];
+  activeSessions: ActiveSessionItem[];
   onSearchInput: (event: InputEvent) => void;
   onSelectFilter: (mode: SidebarFilterMode) => void;
   onFocusMessage: (targetId: string) => void;
@@ -30,6 +38,7 @@ export function renderChatSidebar({
   search,
   filter,
   entries,
+  activeSessions,
   onSearchInput,
   onSelectFilter,
   onFocusMessage,
@@ -74,6 +83,26 @@ export function renderChatSidebar({
       </div>
 
       <div class="cv-tree-status">${entries.length} entries</div>
+
+      ${activeSessions.length > 0
+        ? html`
+            <div class="cv-sidebar-sessions">
+              <div class="cv-sidebar-sessions-header">Sessions</div>
+              ${activeSessions.map(
+                (s) => html`
+                  <a class="cv-sidebar-session-item" href="#/session/${s.id}">
+                    ${s.attached
+                      ? html`<span class="cv-sidebar-session-dot active"></span>`
+                      : s.activeHere
+                        ? html`<span class="cv-sidebar-session-dot idle"></span>`
+                        : nothing}
+                    <span class="cv-sidebar-session-name">${s.name}</span>
+                  </a>
+                `,
+              )}
+            </div>
+          `
+        : nothing}
     </aside>
   `;
 }
