@@ -1,10 +1,12 @@
 import { isArchivedSessionName, unarchiveSessionName } from "@shared/session-archive.js";
+import type { SessionMessageStats } from "@shared/types.js";
+import { emptyMessageStats } from "@shared/session-stats.js";
 
 export interface SessionInfo {
   name: string;
   createdAt: string;
   lastActivityAt: string;
-  messageCount: number;
+  messageStats: SessionMessageStats;
 }
 
 export interface RuntimeInfo {
@@ -24,7 +26,7 @@ export async function fetchSessionInfo(sessionId: string): Promise<SessionInfo |
       name: session.name || "Session",
       createdAt: session.createdAt || "",
       lastActivityAt: session.lastActivityAt || "",
-      messageCount: session.messageCount || 0,
+      messageStats: session.messageStats || emptyMessageStats(),
     };
   } catch {
     return null;
