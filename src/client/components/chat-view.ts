@@ -7,7 +7,9 @@ import type {
   QueueDeliveryMode,
   ExtensionUIRequest,
   ImageContent,
+  SessionMessageStats,
 } from "@shared/types.js";
+import { emptyMessageStats } from "@shared/session-stats.js";
 import {
   routeInputText,
   type SubmitIntent,
@@ -47,9 +49,7 @@ import {
 interface SessionStats {
   userMessages: number;
   assistantMessages: number;
-  toolResults: number;
   toolCalls: number;
-  totalVisible: number;
 }
 
 interface InputSubmission {
@@ -88,7 +88,7 @@ export class ChatView extends LitElement {
   @state() private sessionLastActivityAt = "";
   @state() private hostCwd = "";
   @state() private hostGitBranch = "";
-  @state() private persistedMessageCount = 0;
+  @state() private persistedMessageStats: SessionMessageStats = emptyMessageStats();
 
   @state() private extensionUiRequest: ExtensionUIRequest | null = null;
   @state() private extensionUiInput = "";
@@ -186,7 +186,7 @@ export class ChatView extends LitElement {
     this.sessionLastActivityAt = "";
     this.hostCwd = "";
     this.hostGitBranch = "";
-    this.persistedMessageCount = 0;
+    this.persistedMessageStats = emptyMessageStats();
   }
 
   private syncExtensionUiState() {
@@ -323,7 +323,7 @@ export class ChatView extends LitElement {
       this.sessionName = info.name;
       this.sessionCreatedAt = info.createdAt;
       this.sessionLastActivityAt = info.lastActivityAt;
-      this.persistedMessageCount = info.messageCount;
+      this.persistedMessageStats = info.messageStats;
       this.updateDocumentTitle();
     }
   }
@@ -486,7 +486,6 @@ export class ChatView extends LitElement {
   private computeStats(renderable: AgentMessageData[]): SessionStats {
     let userMessages = 0;
     let assistantMessages = 0;
-    let toolResults = 0;
     let toolCalls = 0;
 
     for (const msg of renderable) {
@@ -501,11 +500,9 @@ export class ChatView extends LitElement {
             }
           }
         }
-      } else if (msg.role === "toolResult" || msg.role === "bashExecution") {
-        toolResults++;
       }
     }
-    return { userMessages, assistantMessages, toolResults, toolCalls, totalVisible: renderable.length };
+    return { userMessages, assistantMessages, toolCalls };
   }
 
   private getKnownToolSpecs(renderable: AgentMessageData[]): ToolSpec[] {
@@ -617,8 +614,11 @@ export class ChatView extends LitElement {
               modelLabel,
               thinkingLevel: rs?.currentThinkingLevel || "off",
               stats,
-              persistedMessageCount: this.persistedMessageCount,
+              persistedMessageStats: this.persistedMessageStats,
               pendingMessageCount: rs?.pendingMessageCount || 0,
+              usage: usageTotals,
+              currentContextWindow: rs?.currentContextWindow || null,
+              contextMessageCount: renderableMessages.length,
               systemPrompt: rs?.systemPrompt || "",
               knownTools,
               onStartRename: () => this.startRename(),
@@ -662,7 +662,7 @@ export class ChatView extends LitElement {
             isStreaming,
             currentContextWindow: rs?.currentContextWindow || null,
             autoCompactionEnabled: rs?.autoCompactionEnabled || false,
-            persistedMessageCount: this.persistedMessageCount,
+            persistedMessageCount: this.persistedMessageStats.totalMessages,
             pendingMessageCount: rs?.pendingMessageCount || 0,
             extensionStatuses: this.extensionStatuses,
             extensionWidgets: this.extensionWidgets,
