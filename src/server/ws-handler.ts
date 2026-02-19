@@ -376,7 +376,7 @@ function handlePendingRpcResponse(
   pendingCommands: Map<string, PendingCommand>,
   sessionId: string,
   sessions: SessionManager,
-  event: RpcEvent,
+  _event: RpcEvent,
 ): boolean {
   switch (pending.kind) {
     case "get_state": {

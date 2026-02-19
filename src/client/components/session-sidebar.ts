@@ -1,4 +1,4 @@
-import { LitElement, html } from "lit";
+import { LitElement } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
 import type { SessionMeta, SessionActivityUpdate } from "@shared/types.js";
 import { isArchivedSessionName, unarchiveSessionName } from "@shared/session-archive.js";

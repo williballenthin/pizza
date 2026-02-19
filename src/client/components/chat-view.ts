@@ -101,6 +101,7 @@ export class ChatView extends LitElement {
   private scrollContainer: HTMLElement | null = null;
   private shouldAutoScroll = true;
   private pendingDeepLinkTarget = "";
+  private initialFocusHandled = false;
 
   private _lastBaseMessages: AgentMessageData[] | null = null;
   private _cachedRenderable: AgentMessageData[] = [];
