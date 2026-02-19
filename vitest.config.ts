@@ -8,7 +8,7 @@ export default defineConfig({
     },
   },
   test: {
-    include: ["tests/api/**/*.test.ts"],
+    include: ["tests/**/*.test.ts"],
     testTimeout: 30000,
   },
 });
