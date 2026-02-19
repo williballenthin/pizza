@@ -602,6 +602,7 @@ export class ChatView extends LitElement {
       : renderableMessages;
 
     const isStreaming = rs?.isStreaming ?? false;
+    const isAgentWorking = rs?.isAgentWorking ?? false;
     const connected = rs?.connected ?? false;
     const reconnecting = rs?.reconnecting ?? false;
     const error = rs?.error ?? "";
@@ -659,7 +660,7 @@ export class ChatView extends LitElement {
               .expandToolOutputs=${this.expandToolOutputs}
             ></message-list>
 
-            ${isStreaming ? html`<div class="cv-streaming-indicator"><span class="cv-streaming-cursor"></span></div>` : nothing}
+            ${isAgentWorking ? html`<div class="cv-agent-working"><div class="cv-agent-spinner" title="Agent working"></div></div>` : nothing}
             ${rs?.wasInterrupted && !isStreaming ? html`<div class="cv-interrupted">Interrupted</div>` : nothing}
           </div>
 
@@ -692,7 +693,7 @@ export class ChatView extends LitElement {
             models: rs?.models || [],
             currentProvider: rs?.currentProvider || "",
             currentModel: rs?.currentModel || "",
-            currentThinkingLevel: rs?.currentThinkingLevel || "off",
+            currentThinkingLevel: rs?.currentThinkingLevel || "",
             thinkingLevels: THINKING_LEVELS,
             onModelChange: (e) => this.onStatusModelChange(e),
             onThinkingChange: (e) => this.onStatusThinkingChange(e),

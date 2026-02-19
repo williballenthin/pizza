@@ -12,6 +12,7 @@ import type {
   StateMessage,
   RpcEvent,
   ExtensionUIRequest,
+  SessionActivityUpdate,
 } from "@shared/types.js";
 import { extractPromptText } from "./message-shaping.js";
 import { ExtensionUiState } from "./extension-ui-state.js";
@@ -20,6 +21,7 @@ export interface SessionRuntimeState {
   baseMessages: AgentMessageData[];
   streamingTail: AgentMessageData[];
   isStreaming: boolean;
+  isAgentWorking: boolean;
   currentModel: string;
   currentProvider: string;
   currentThinkingLevel: ThinkingLevel;
@@ -59,6 +61,7 @@ interface PartialAssistantMessage {
 export class SessionRuntime {
   private sessionId: string;
   private ws: WebSocket | null = null;
+  private activitySource: EventSource | null = null;
   private reconnectAttempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private listener: SessionRuntimeListener;
@@ -68,6 +71,7 @@ export class SessionRuntime {
     baseMessages: [],
     streamingTail: [],
     isStreaming: false,
+    isAgentWorking: false,
     currentModel: "",
     currentProvider: "",
     currentThinkingLevel: "off",
@@ -134,6 +138,49 @@ export class SessionRuntime {
     this.ws.onerror = () => {
       this.updateState({ error: "WebSocket error occurred." });
     };
+
+    // Also connect to activity SSE for authoritative agent working status
+    this.connectActivitySource();
+  }
+
+  private connectActivitySource() {
+    if (this.activitySource) {
+      this.activitySource.close();
+    }
+
+    // Fetch initial activity status
+    this.fetchActivityStatus();
+
+    this.activitySource = new EventSource("/api/sessions/events");
+
+    this.activitySource.onmessage = (ev) => {
+      try {
+        const update: SessionActivityUpdate = JSON.parse(ev.data);
+        if (update.sessionId === this.sessionId && update.activity) {
+          this.updateState({ isAgentWorking: update.activity.isWorking });
+        }
+      } catch {
+        // Ignore parse errors
+      }
+    };
+
+    this.activitySource.onerror = () => {
+      // The browser will automatically try to reconnect EventSource
+    };
+  }
+
+  private async fetchActivityStatus() {
+    try {
+      const res = await fetch("/api/sessions");
+      if (!res.ok) return;
+      const data = await res.json();
+      const session = data.sessions?.find((s: any) => s.id === this.sessionId);
+      if (session?.activity) {
+        this.updateState({ isAgentWorking: session.activity.isWorking });
+      }
+    } catch {
+      // Ignore fetch errors
+    }
   }
 
   public cleanup() {
@@ -144,6 +191,10 @@ export class SessionRuntime {
       this.ws.onerror = null;
       this.ws.close();
       this.ws = null;
+    }
+    if (this.activitySource) {
+      this.activitySource.close();
+      this.activitySource = null;
     }
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);

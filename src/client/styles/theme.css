@@ -1444,6 +1444,26 @@ chat-view {
   }
 }
 
+.cv-agent-working {
+  margin-top: 12px;
+  padding-left: 14px;
+  display: flex;
+  align-items: center;
+}
+
+.cv-agent-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(156, 163, 175, 0.5);
+  border-top-color: var(--text-primary);
+  border-radius: 50%;
+  animation: cv-spin 1s linear infinite;
+}
+
+@keyframes cv-spin {
+  to { transform: rotate(360deg); }
+}
+
 .cv-interrupted {
   margin-top: 8px;
   margin-left: 14px;

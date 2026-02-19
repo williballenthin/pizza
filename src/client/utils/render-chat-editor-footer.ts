@@ -27,7 +27,7 @@ interface RenderChatEditorFooterOptions {
   models: ModelInfo[];
   currentProvider: string | null;
   currentModel: string | null;
-  currentThinkingLevel: ThinkingLevel;
+  currentThinkingLevel: ThinkingLevel | "";
   thinkingLevels: ThinkingLevel[];
   onModelChange: (event: Event) => void;
   onThinkingChange: (event: Event) => void;
@@ -122,6 +122,7 @@ function renderModelPicker(
     (model) =>
       model.provider === currentProvider && model.id === currentModel,
   );
+  const showPlaceholder = !hasSelected && !selected;
 
   return html`
     <select
@@ -132,6 +133,9 @@ function renderModelPicker(
       @change=${onModelChange}
       ?disabled=${models.length === 0}
     >
+      ${showPlaceholder
+        ? html`<option value="" selected></option>`
+        : nothing}
       ${!hasSelected && selected
         ? html`<option value=${selected}>${currentProvider ? `(${currentProvider}) ` : ""}${currentModel}</option>`
         : nothing}
@@ -142,18 +146,17 @@ function renderModelPicker(
           </option>
         `,
       )}
-      ${models.length === 0 && !selected
-        ? html`<option value="" selected>no model</option>`
-        : nothing}
     </select>
   `;
 }
 
 function renderThinkingPicker(
-  currentThinkingLevel: ThinkingLevel,
+  currentThinkingLevel: ThinkingLevel | "",
   thinkingLevels: ThinkingLevel[],
   onThinkingChange: (event: Event) => void
 ) {
+  const hasValue = currentThinkingLevel && thinkingLevels.includes(currentThinkingLevel);
+
   return html`
     <select
       class="cv-status-select cv-status-select-thinking"
@@ -162,6 +165,9 @@ function renderThinkingPicker(
       .value=${currentThinkingLevel}
       @change=${onThinkingChange}
     >
+      ${!hasValue
+        ? html`<option value="" selected></option>`
+        : nothing}
       ${thinkingLevels.map(
         (level) => html`
           <option value=${level}>${level}</option>
