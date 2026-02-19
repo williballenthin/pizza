@@ -755,6 +755,8 @@ export class ChatInput extends LitElement {
     this.dragDepth = 0;
     if (this.textarea) {
       this.textarea.style.height = "auto";
+      // Blur on mobile so the textarea collapses back to its default size
+      this.textarea.blur();
     }
   }
 
