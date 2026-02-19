@@ -6,6 +6,7 @@ import {
   isArchivedSessionName,
   unarchiveSessionName,
 } from "@shared/session-archive.js";
+import { fetchProjects, type ProjectInfo } from "../utils/session-actions.js";
 
 @customElement("session-list")
 export class SessionList extends LitElement {
@@ -16,6 +17,9 @@ export class SessionList extends LitElement {
   @state() private contextMenuPos = { x: 0, y: 0 };
   @state() private renamingId: string | null = null;
   @state() private renameValue = "";
+  @state() private showProjectPicker = false;
+  @state() private projects: ProjectInfo[] = [];
+  @state() private cwdInput = "";
 
   private longPressTimer: ReturnType<typeof setTimeout> | null = null;
   private eventSource: EventSource | null = null;
@@ -88,8 +92,9 @@ export class SessionList extends LitElement {
     }
 
     .session-item {
-      display: block;
-      padding: 8px 20px;
+      display: flex;
+      align-items: center;
+      padding: 8px 12px 8px 20px;
       border-bottom: 0px solid transparent;
       cursor: pointer;
       text-decoration: none;
@@ -97,7 +102,6 @@ export class SessionList extends LitElement {
       user-select: none;
       -webkit-user-select: none;
       -webkit-touch-callout: none;
-      position: relative;
       transition: background-color 150ms ease;
     }
 
@@ -344,6 +348,102 @@ export class SessionList extends LitElement {
       inset: 0;
       z-index: 999;
     }
+
+    .project-picker {
+      position: fixed;
+      top: 44px;
+      right: 12px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      box-shadow: var(--shadow-lg);
+      z-index: 1000;
+      min-width: 280px;
+      max-width: 360px;
+      padding: 8px 0;
+    }
+
+    .project-picker-label {
+      padding: 4px 16px 6px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--muted);
+    }
+
+    .project-item {
+      display: block;
+      width: 100%;
+      padding: 8px 16px;
+      border: none;
+      background: none;
+      text-align: left;
+      cursor: pointer;
+      font-family: inherit;
+      color: var(--text-primary);
+    }
+
+    .project-item:hover {
+      background: var(--surface-alt);
+    }
+
+    .project-item-path {
+      font-size: 13px;
+      font-weight: 500;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .project-item-meta {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 1px;
+    }
+
+    .project-picker-divider {
+      margin: 6px 0;
+      border: none;
+      border-top: 1px solid var(--borderMuted);
+    }
+
+    .project-cwd-form {
+      display: flex;
+      gap: 6px;
+      padding: 4px 10px 6px;
+    }
+
+    .project-cwd-input {
+      flex: 1;
+      padding: 4px 8px;
+      border: 1px solid var(--borderMuted);
+      border-radius: 4px;
+      background: var(--bg);
+      color: var(--text-primary);
+      font-size: 12px;
+      font-family: monospace;
+      outline: none;
+    }
+
+    .project-cwd-input:focus {
+      border-color: var(--borderAccent);
+    }
+
+    .project-cwd-go {
+      padding: 4px 10px;
+      border: 1px solid var(--borderMuted);
+      border-radius: 4px;
+      background: var(--bg);
+      color: var(--text-primary);
+      font-size: 12px;
+      font-family: inherit;
+      cursor: pointer;
+    }
+
+    .project-cwd-go:hover {
+      background: var(--surface-alt);
+    }
   `;
 
   connectedCallback() {
@@ -398,14 +498,39 @@ export class SessionList extends LitElement {
     }
   }
 
-  private async createSession() {
+  private async openProjectPicker() {
+    this.projects = await fetchProjects();
+    this.cwdInput = "";
+    this.showProjectPicker = true;
+  }
+
+  private closeProjectPicker() {
+    this.showProjectPicker = false;
+  }
+
+  private async createSessionWithCwd(cwd: string) {
+    this.showProjectPicker = false;
     try {
-      const res = await fetch("/api/sessions", { method: "POST" });
+      const res = await fetch("/api/sessions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cwd }),
+      });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const data = await res.json();
       window.location.hash = `#/session/${data.id}`;
     } catch (e) {
       this.error = `Failed to create session: ${e}`;
+    }
+  }
+
+  private onCwdInputKeydown(e: KeyboardEvent) {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const val = this.cwdInput.trim();
+      if (val) this.createSessionWithCwd(val);
+    } else if (e.key === "Escape") {
+      this.closeProjectPicker();
     }
   }
 

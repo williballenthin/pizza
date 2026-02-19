@@ -514,10 +514,7 @@ export class SessionManager {
           type?: string;
           timestamp?: string;
           name?: string;
-          model?: {
-            id: string;
-            provider: string;
-          };
+          modelId?: string;
           message?: {
             role?: string;
             content?: string | Array<{ type: string; text?: string }>;
@@ -526,8 +523,8 @@ export class SessionManager {
 
         if (parsedLine.timestamp) lastTimestamp = parsedLine.timestamp;
 
-        if (parsedLine.type === "state" && parsedLine.model) {
-          model = parsedLine.model.id;
+        if (parsedLine.type === "model_change" && parsedLine.modelId) {
+          model = parsedLine.modelId as string;
         }
 
         if (parsedLine.type === "session_info" && parsedLine.name) {
