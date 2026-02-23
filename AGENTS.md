@@ -85,3 +85,11 @@ tests/e2e/             Playwright E2E tests for full application workflows.
 ```
 
 **Important:** Never use `pkill -f "vite dev"` or similar blanket kill commands. There may be other services running that should not be interrupted. Only stop the specific process you started.
+
+## Tools
+
+- use `uvx rodney --local` to automate a persistent Chrome instance to load the application, interact with the interface, inspect its state, and create screenshots. stop instances once you're done with them.
+- for reliable captures, open a known hash route first, then run `waitload` and `waitstable` before taking screenshots.
+- verify UI state with `js` or `exists` before capture (for example, check that `settings-panel` is not open).
+- `rodney screenshot -w/-h` sets output image dimensions, but does not change CSS viewport width (`window.innerWidth` stays at the default desktop size). use Playwright/device emulation if you need true responsive mobile layout.
+- if captures look stale or inherit old tab state, run `uvx rodney --local stop`, remove `./.rodney/`, and start again.
