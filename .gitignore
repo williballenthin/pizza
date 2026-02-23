@@ -13,3 +13,4 @@ src/**/*.d.ts
 src/**/*.js.map
 src/**/*.d.ts.map
 .rodney/chrome-data/Default
+.rodney/chrome-data
