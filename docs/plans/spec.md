@@ -229,6 +229,20 @@ Each tool call block shows:
 - Filter options are `User`, `No-tools`, and `All`.
 - Default filter is `User` to reduce sidebar entry count and focus navigation on user turns.
 
+### Git Sidebar Panel
+
+- The sidebar includes a Git panel above message history controls.
+- The panel shows current branch, HEAD short SHA, staged files, and unstaged files for the session's project directory.
+- File entries include status markers with color coding:
+  - Added (`A`) is green.
+  - Modified/renamed/conflict/untracked (`M`, `R`, `U`, `?`) is yellow.
+  - Deleted (`D`) is red.
+- The panel also shows recent commit history, limited to 16 commits by default.
+- Selecting a commit replaces the top file list with files changed in that commit.
+- Clicking any file entry opens a diff modal with the patch for that file.
+- Git metadata refreshes automatically every 5 seconds and also refreshes when session activity updates are received.
+- If the session directory is not a Git repository, the panel shows a "Not a git repository" state.
+
 ---
 
 ## 6. Settings Panel
@@ -326,6 +340,51 @@ Health check endpoint.
   "activeSessions": 2
 }
 ```
+
+#### `GET /api/projects`
+
+Returns discovered project roots from the sessions store.
+
+**Response** `200 OK`:
+```json
+{
+  "projects": [
+    {
+      "cwd": "/home/user/code/my-pi-web",
+      "displayPath": "~/code/my-pi-web",
+      "sessionCount": 12,
+      "lastActivityAt": "2026-02-23T08:00:00Z"
+    }
+  ]
+}
+```
+
+#### `GET /api/sessions/:id/git/status`
+
+Returns Git working tree status for the session's project.
+
+**Response** `200 OK`:
+```json
+{
+  "isRepo": true,
+  "branch": "main",
+  "head": "4a7f...",
+  "staged": [{ "status": "M", "path": "src/file.ts" }],
+  "unstaged": [{ "status": "?", "path": "scratch.txt" }]
+}
+```
+
+#### `GET /api/sessions/:id/git/commits?limit=16`
+
+Returns recent commits for the session's project.
+
+#### `GET /api/sessions/:id/git/commits/:sha/files`
+
+Returns file-level status for the specified commit.
+
+#### `GET /api/sessions/:id/git/diff?scope=staged|unstaged|commit&path=<file>&sha=<commit>`
+
+Returns a textual diff for a selected file and scope.
 
 ### WebSocket Protocol
 
