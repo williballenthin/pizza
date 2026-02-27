@@ -261,12 +261,8 @@ export class SessionList extends LitElement {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      opacity: 0;
+      opacity: 0.35;
       transition: opacity 120ms ease, color 120ms ease;
-    }
-
-    .session-item:hover .session-archive-btn {
-      opacity: 1;
     }
 
     .session-archive-btn:hover,
