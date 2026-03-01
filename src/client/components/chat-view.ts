@@ -67,6 +67,10 @@ const THINKING_LEVELS: ThinkingLevel[] = [
 ];
 
 const EMPTY_SET = new Set<string>();
+const DRAFT_STORAGE_PREFIX = "pi-chat-draft:";
+const CACHE_STORAGE_PREFIX = "pi-chat-cache:";
+const MAX_CACHED_MESSAGES = 500;
+const MAX_CACHE_BYTES = 900_000;
 
 @customElement("chat-view")
 export class ChatView extends LitElement {
@@ -97,6 +101,7 @@ export class ChatView extends LitElement {
   @state() private extensionWidgets: ExtensionWidgetEntry[] = [];
   @state() private canScrollToTop = false;
   @state() private canScrollToBottom = false;
+  @state() private cachedMessages: AgentMessageData[] = [];
 
   private extensionUiState = new ExtensionUiState();
   private runtime: SessionRuntime | null = null;
@@ -105,6 +110,10 @@ export class ChatView extends LitElement {
   private pendingDeepLinkTarget = "";
   private initialFocusHandled = false;
   private scrollAffordanceFrame = 0;
+  private cachePersistTimer: ReturnType<typeof setTimeout> | null = null;
+  private pendingCacheMessages: AgentMessageData[] = [];
+  private pendingDraftRestore: string | null = null;
+  private draftRestoreApplied = false;
 
   private _lastBaseMessages: AgentMessageData[] | null = null;
   private _cachedRenderable: AgentMessageData[] = [];
@@ -160,13 +169,12 @@ export class ChatView extends LitElement {
       this.scheduleScrollAffordanceUpdate();
     }
 
-    const allMessages = this.runtimeState
-      ? [...this.runtimeState.baseMessages, ...this.runtimeState.streamingTail]
-      : [];
+    const allMessages = this.getAllMessagesForRender();
     if (this.pendingDeepLinkTarget && allMessages.length) {
       this.tryApplyDeepLinkTarget(this.pendingDeepLinkTarget);
     }
 
+    this.restoreDraftIfNeeded();
     this.scheduleScrollAffordanceUpdate();
   }
 
@@ -183,10 +191,19 @@ export class ChatView extends LitElement {
       cancelAnimationFrame(this.scrollAffordanceFrame);
       this.scrollAffordanceFrame = 0;
     }
+    if (this.cachePersistTimer) {
+      clearTimeout(this.cachePersistTimer);
+      this.cachePersistTimer = null;
+    }
+    this.pendingCacheMessages = [];
   }
 
   private bootstrapSessionRuntime() {
     if (!this.sessionId) return;
+    this.cachedMessages = this.loadCachedMessages();
+    this.pendingDraftRestore = this.loadDraftText();
+    this.draftRestoreApplied = false;
+
     this.runtime = new SessionRuntime(
       this.sessionId,
       this.extensionUiState,
@@ -197,16 +214,18 @@ export class ChatView extends LitElement {
           this.updateDocumentTitle();
         }
         this.syncExtensionUiState();
+        if (state.hasLoadedState) {
+          this.scheduleCachePersist(state.baseMessages);
+        }
         if (this.shouldAutoScroll) {
           this.scheduleScroll();
         }
-        // Auto-focus input only for new sessions (no user/assistant messages)
         if (!this.initialFocusHandled) {
           this.initialFocusHandled = true;
           const hasUserOrAssistant = state.baseMessages.some(
             (m) => m.role === "user" || m.role === "user-with-attachments" || m.role === "assistant"
           );
-          if (!hasUserOrAssistant) {
+          if (!hasUserOrAssistant && !this.isCachedReadonlyActive()) {
             this.focusChatInput();
           }
         }
@@ -226,7 +245,11 @@ export class ChatView extends LitElement {
     this.sessionLastActivityAt = "";
     this.hostCwd = "";
     this.persistedMessageStats = emptyMessageStats();
+    this.cachedMessages = [];
+    this.pendingCacheMessages = [];
     this.initialFocusHandled = false;
+    this.pendingDraftRestore = null;
+    this.draftRestoreApplied = false;
   }
 
   private syncExtensionUiState() {
@@ -235,6 +258,135 @@ export class ChatView extends LitElement {
     if (snapshot.input !== this.extensionUiInput) this.extensionUiInput = snapshot.input;
     if (snapshot.statuses !== this.extensionStatuses) this.extensionStatuses = snapshot.statuses;
     if (snapshot.widgets !== this.extensionWidgets) this.extensionWidgets = snapshot.widgets;
+  }
+
+  private getDraftStorageKey(): string {
+    return `${DRAFT_STORAGE_PREFIX}${this.sessionId}`;
+  }
+
+  private getCacheStorageKey(): string {
+    return `${CACHE_STORAGE_PREFIX}${this.sessionId}`;
+  }
+
+  private loadDraftText(): string | null {
+    if (!this.sessionId) return null;
+    try {
+      const raw = localStorage.getItem(this.getDraftStorageKey());
+      if (!raw) return null;
+      return raw;
+    } catch {
+      return null;
+    }
+  }
+
+  private persistDraftText(text: string): void {
+    if (!this.sessionId) return;
+    try {
+      if (!text.trim()) {
+        localStorage.removeItem(this.getDraftStorageKey());
+        return;
+      }
+      localStorage.setItem(this.getDraftStorageKey(), text);
+    } catch {
+      return;
+    }
+  }
+
+  private restoreDraftIfNeeded() {
+    if (this.draftRestoreApplied) return;
+
+    const text = this.pendingDraftRestore;
+    if (!text) {
+      this.pendingDraftRestore = null;
+      this.draftRestoreApplied = true;
+      return;
+    }
+
+    const input = this.querySelector("chat-input") as
+      | (HTMLElement & { setText?: (value: string, options?: { focus?: boolean }) => void })
+      | null;
+    if (!input?.setText) return;
+
+    this.pendingDraftRestore = null;
+    this.draftRestoreApplied = true;
+    input.setText(text, { focus: false });
+  }
+
+  private onDraftChange(e: CustomEvent<{ text: string }>) {
+    this.persistDraftText(e.detail?.text || "");
+  }
+
+  private loadCachedMessages(): AgentMessageData[] {
+    if (!this.sessionId) return [];
+    try {
+      const raw = localStorage.getItem(this.getCacheStorageKey());
+      if (!raw) return [];
+      const parsed = JSON.parse(raw) as { messages?: unknown };
+      if (!Array.isArray(parsed.messages)) return [];
+      return parsed.messages.filter(
+        (message): message is AgentMessageData =>
+          !!message && typeof message === "object" && typeof (message as AgentMessageData).role === "string",
+      );
+    } catch {
+      return [];
+    }
+  }
+
+  private scheduleCachePersist(messages: AgentMessageData[]) {
+    if (!this.sessionId) return;
+    this.pendingCacheMessages = messages;
+    if (this.cachePersistTimer) return;
+    this.cachePersistTimer = setTimeout(() => {
+      this.cachePersistTimer = null;
+      this.persistCachedMessages(this.pendingCacheMessages);
+    }, 200);
+  }
+
+  private persistCachedMessages(messages: AgentMessageData[]) {
+    if (!this.sessionId) return;
+    const key = this.getCacheStorageKey();
+    if (messages.length === 0) {
+      try {
+        localStorage.removeItem(key);
+      } catch {
+        return;
+      }
+      return;
+    }
+
+    let candidate = messages.slice(-MAX_CACHED_MESSAGES);
+
+    while (candidate.length > 0) {
+      const payload = JSON.stringify({ version: 1, savedAt: Date.now(), messages: candidate });
+      if (payload.length > MAX_CACHE_BYTES) {
+        candidate = candidate.slice(Math.ceil(candidate.length / 3));
+        continue;
+      }
+      try {
+        localStorage.setItem(key, payload);
+        return;
+      } catch {
+        candidate = candidate.slice(Math.ceil(candidate.length / 3));
+      }
+    }
+
+    try {
+      localStorage.removeItem(key);
+    } catch {
+      return;
+    }
+  }
+
+  private isCachedReadonlyActive(): boolean {
+    return this.cachedMessages.length > 0 && !(this.runtimeState?.hasLoadedState ?? false);
+  }
+
+  private getAllMessagesForRender(): AgentMessageData[] {
+    if (this.isCachedReadonlyActive()) {
+      return this.cachedMessages;
+    }
+    if (!this.runtimeState) return [];
+    return [...this.runtimeState.baseMessages, ...this.runtimeState.streamingTail];
   }
 
   private onSend(e: CustomEvent<InputSubmission>) {
@@ -254,6 +406,7 @@ export class ChatView extends LitElement {
   }
 
   private routeAndSubmitInput(input: InputSubmission, intent: SubmitIntent) {
+    if (this.isCachedReadonlyActive()) return;
     if (!this.runtime || !this.runtimeState) return;
 
     const text = typeof input.text === "string" ? input.text : "";
@@ -555,8 +708,8 @@ export class ChatView extends LitElement {
     this.syncExtensionUiState();
   }
 
-  private getRenderableMessages(): AgentMessageData[] {
-    return getRenderableMessages(this.runtimeState?.baseMessages || []);
+  private getRenderableMessages(messages: AgentMessageData[]): AgentMessageData[] {
+    return getRenderableMessages(messages);
   }
 
   private getSidebarEntries(renderable: AgentMessageData[]): SidebarEntry[] {
@@ -660,12 +813,13 @@ export class ChatView extends LitElement {
 
   render() {
     const rs = this.runtimeState;
-    const baseMessages = rs?.baseMessages || [];
-    const streamingTail = rs?.streamingTail || [];
+    const cachedReadonly = this.isCachedReadonlyActive();
+    const baseMessages = cachedReadonly ? this.cachedMessages : rs?.baseMessages || [];
+    const streamingTail = cachedReadonly ? [] : rs?.streamingTail || [];
 
     if (baseMessages !== this._lastBaseMessages) {
       this._lastBaseMessages = baseMessages;
-      this._cachedRenderable = this.getRenderableMessages();
+      this._cachedRenderable = this.getRenderableMessages(baseMessages);
       this._cachedStats = this.computeStats(this._cachedRenderable);
       this._cachedKnownTools = this.getKnownToolSpecs(this._cachedRenderable);
       this._cachedUsageTotals = this.computeUsageTotals(baseMessages);
@@ -696,8 +850,8 @@ export class ChatView extends LitElement {
       ? [...renderableMessages, ...getRenderableMessages(streamingTail)]
       : renderableMessages;
 
-    const isStreaming = rs?.isStreaming ?? false;
-    const isAgentWorking = rs?.isAgentWorking ?? false;
+    const isStreaming = cachedReadonly ? false : rs?.isStreaming ?? false;
+    const isAgentWorking = cachedReadonly ? false : rs?.isAgentWorking ?? false;
     const composerStateClass = isAgentWorking || isStreaming ? "agent-active" : "agent-idle";
     const connected = rs?.connected ?? false;
     const reconnecting = rs?.reconnecting ?? false;
@@ -738,47 +892,52 @@ export class ChatView extends LitElement {
             : nothing}
 
           <div class="cv-messages-wrap">
-            <div class="cv-messages">
-            ${renderSessionInfoStack({
-              sessionId: this.sessionId,
-              sessionName: this.sessionName,
-              renamingName: this.renamingName,
-              editName: this.editName,
-              createdAtLabel,
-              lastActivityAtLabel,
-              stats,
-              persistedMessageStats: this.persistedMessageStats,
-              usage: usageTotals,
-              currentContextWindow: rs?.currentContextWindow || null,
-              contextMessageCount: allRenderable.length,
-              systemPrompt: rs?.systemPrompt || "",
-              knownTools,
-              onStartRename: () => this.startRename(),
-              onEditNameInput: (e: InputEvent) => (this.editName = (e.target as HTMLInputElement).value),
-              onTitleKeydown: (e: KeyboardEvent) => this.onTitleKeydown(e),
-              onCommitRename: () => this.commitRename(),
-            })}
+            <div class="cv-messages ${cachedReadonly ? "cached-readonly" : ""}">
+              ${cachedReadonly
+                ? html`<div class="cv-cached-banner">Showing cached conversation. Read-only until live sync completes.</div>`
+                : nothing}
+              <div class="cv-message-stage">
+                ${renderSessionInfoStack({
+                  sessionId: this.sessionId,
+                  sessionName: this.sessionName,
+                  renamingName: this.renamingName,
+                  editName: this.editName,
+                  createdAtLabel,
+                  lastActivityAtLabel,
+                  stats,
+                  persistedMessageStats: this.persistedMessageStats,
+                  usage: usageTotals,
+                  currentContextWindow: rs?.currentContextWindow || null,
+                  contextMessageCount: allRenderable.length,
+                  systemPrompt: rs?.systemPrompt || "",
+                  knownTools,
+                  onStartRename: () => this.startRename(),
+                  onEditNameInput: (e: InputEvent) => (this.editName = (e.target as HTMLInputElement).value),
+                  onTitleKeydown: (e: KeyboardEvent) => this.onTitleKeydown(e),
+                  onCommitRename: () => this.commitRename(),
+                })}
 
-            <message-list
-              .messages=${allRenderable}
-              .allMessages=${allMessages}
-              .isStreaming=${isStreaming}
-              .pendingToolCalls=${rs?.pendingToolCalls || EMPTY_SET}
-              .showThinking=${this.showThinking}
-              .expandToolOutputs=${this.expandToolOutputs}
-            ></message-list>
+                <message-list
+                  .messages=${allRenderable}
+                  .allMessages=${allMessages}
+                  .isStreaming=${isStreaming}
+                  .pendingToolCalls=${rs?.pendingToolCalls || EMPTY_SET}
+                  .showThinking=${this.showThinking}
+                  .expandToolOutputs=${this.expandToolOutputs}
+                ></message-list>
 
-            ${isAgentWorking
-              ? html`
-                  <div class="cv-agent-working">
-                    <div class="cv-agent-spinner" title="Agent working"></div>
-                    <button class="cv-agent-stop-btn" @click=${this.onStop} title="Stop">
-                      &#9632;
-                    </button>
-                  </div>
-                `
-              : nothing}
-              ${rs?.wasInterrupted && !isStreaming ? html`<div class="cv-interrupted">Interrupted</div>` : nothing}
+                ${isAgentWorking
+                  ? html`
+                      <div class="cv-agent-working">
+                        <div class="cv-agent-spinner" title="Agent working"></div>
+                        <button class="cv-agent-stop-btn" @click=${this.onStop} title="Stop">
+                          &#9632;
+                        </button>
+                      </div>
+                    `
+                  : nothing}
+                ${rs?.wasInterrupted && !isStreaming ? html`<div class="cv-interrupted">Interrupted</div>` : nothing}
+              </div>
             </div>
 
             ${this.canScrollToBottom
@@ -800,9 +959,15 @@ export class ChatView extends LitElement {
           <chat-input
             class=${composerStateClass}
             .isStreaming=${isStreaming}
-            .disabled=${(rs?.models.length || 0) > 0 && !rs?.currentModel}
+            .disabled=${cachedReadonly || ((rs?.models.length || 0) > 0 && !rs?.currentModel)}
+            .placeholder=${cachedReadonly
+              ? "Read-only: waiting for live sync…"
+              : (rs?.models.length || 0) > 0 && !rs?.currentModel
+                ? "No model available"
+                : "Prompt…"}
             .commands=${rs?.commands || []}
             .commandsLoading=${rs?.commandsLoading || false}
+            @draft-change=${this.onDraftChange}
             @send=${this.onSend}
             @steer=${this.onSteer}
             @follow-up=${this.onFollowUp}

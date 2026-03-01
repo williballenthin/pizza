@@ -211,6 +211,7 @@ Each tool call block shows:
   - **Enter** sends the message (on desktop). **Shift+Enter** inserts a newline.
   - On mobile, the virtual keyboard's "Send" / "Return" action sends the message.
 - **Send button**: To the right of the input area. Visually prominent. Disabled when the input is empty.
+- **Draft persistence**: Draft text is persisted per-session in browser storage and restored after tab discard/reload. Sending a message clears the persisted draft for that session.
 - **Stop button**: While the agent is streaming, the Send button transforms into a **Stop** button (e.g., square icon). Tapping it sends an abort command to the agent, stopping the current response.
 
 ### Steer / Interrupt Behavior
@@ -639,6 +640,7 @@ This approach reuses the rendering layer (the hardest part to build well — mar
 ### Connection Errors
 
 - If the WebSocket connection drops, the UI shows a non-intrusive banner: "Connection lost. Reconnecting..." with automatic reconnection (exponential backoff: 1s, 2s, 4s, 8s, max 30s).
+- On chat view startup, if a cached snapshot exists for the session, the UI renders the cached messages immediately in a muted read-only mode with a sticky top banner indicating the view is cached until live sync completes. While cached mode is active, the composer is disabled.
 - On successful reconnect, a fresh `state` message re-syncs the conversation.
 
 ### Agent Errors

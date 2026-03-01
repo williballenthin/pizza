@@ -1081,6 +1081,25 @@ session-sidebar {
   scroll-behavior: auto;
 }
 
+.cv-cached-banner {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  margin: 0 auto 10px;
+  width: min(100%, var(--max-width));
+  border: 1px solid var(--borderMuted);
+  border-radius: var(--radius);
+  padding: 7px 10px;
+  font-size: 11px;
+  color: var(--text-secondary);
+  background: var(--surface);
+  backdrop-filter: blur(2px);
+}
+
+.cv-messages.cached-readonly .cv-message-stage {
+  opacity: 0.62;
+}
+
 .ml-list {
   width: 100%;
   min-width: 0;

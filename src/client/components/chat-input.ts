@@ -10,12 +10,17 @@ export interface ChatInputSubmitDetail {
   images: ImageContent[];
 }
 
+export interface ChatInputDraftDetail {
+  text: string;
+}
+
 @customElement("chat-input")
 export class ChatInput extends LitElement {
   @property({ type: Boolean }) isStreaming = false;
   @property({ type: Boolean }) disabled = false;
   @property({ type: Array }) commands: SlashCommandSpec[] = [];
   @property({ type: Boolean }) commandsLoading = false;
+  @property({ type: String }) placeholder = "Prompt…";
 
   @state() private text = "";
   @state() private selectedCommandIndex = 0;
@@ -455,7 +460,7 @@ export class ChatInput extends LitElement {
             : nothing}
 
           <textarea
-            placeholder=${this.disabled ? "No model available" : "Prompt…"}
+            placeholder=${this.placeholder}
             rows="1"
             .value=${this.text}
             ?disabled=${this.disabled}
@@ -514,6 +519,7 @@ export class ChatInput extends LitElement {
     this.text = ta.value;
     this.selectedCommandIndex = 0;
     this.syncHeight(ta);
+    this.emitDraftChange();
   }
 
   private onKeydown(e: KeyboardEvent) {
@@ -782,6 +788,7 @@ export class ChatInput extends LitElement {
     this.attachmentError = "";
     this.isDragOver = false;
     this.dragDepth = 0;
+    this.emitDraftChange();
     if (this.textarea) {
       this.textarea.style.height = "auto";
       // Blur on mobile so the textarea collapses back to its default size
@@ -793,21 +800,34 @@ export class ChatInput extends LitElement {
     this.textarea?.focus();
   }
 
-  setText(value: string) {
+  setText(value: string, options?: { focus?: boolean }) {
     this.text = value;
     this.selectedCommandIndex = 0;
+    this.emitDraftChange();
     this.updateComplete.then(() => {
       if (!this.textarea) return;
       this.textarea.value = value;
       this.syncHeight(this.textarea);
-      this.textarea.focus();
-      const end = this.textarea.value.length;
-      this.textarea.setSelectionRange(end, end);
+      if (options?.focus !== false) {
+        this.textarea.focus();
+        const end = this.textarea.value.length;
+        this.textarea.setSelectionRange(end, end);
+      }
     });
   }
 
   getText(): string {
     return this.text;
+  }
+
+  private emitDraftChange() {
+    this.dispatchEvent(
+      new CustomEvent<ChatInputDraftDetail>("draft-change", {
+        detail: { text: this.text },
+        bubbles: true,
+        composed: true,
+      }),
+    );
   }
 
   private buildSubmitDetail(): ChatInputSubmitDetail | null {

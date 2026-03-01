@@ -392,6 +392,96 @@ test.describe("Chat View", () => {
     await expect(page.locator("chat-input .send-btn.send")).toBeAttached();
   });
 
+  test("restores per-session draft text after reload", async ({ page }) => {
+    await openSession(page, sessionId);
+
+    const input = page.locator("chat-input textarea");
+    await input.fill("draft should survive reload");
+    await page.reload();
+
+    await expect(page.locator("chat-view")).toBeAttached();
+    await expect(page.locator("chat-input textarea")).toHaveValue(
+      "draft should survive reload",
+    );
+  });
+
+  test("shows cached read-only conversation until live state arrives", async ({
+    page,
+  }) => {
+    await page.addInitScript(
+      ({ id }) => {
+        localStorage.setItem(
+          `pi-chat-cache:${id}`,
+          JSON.stringify({
+            version: 1,
+            savedAt: Date.now(),
+            messages: [
+              {
+                role: "user",
+                content: "cached startup message",
+                timestamp: Date.now(),
+              },
+            ],
+          }),
+        );
+      },
+      { id: sessionId },
+    );
+
+    await page.routeWebSocket(new RegExp(`/api/sessions/${sessionId}/ws`), (ws) => {
+      ws.onMessage((rawMessage) => {
+        const parsed = JSON.parse(rawMessage.toString()) as {
+          type?: string;
+        };
+
+        if (parsed.type === "get_available_models") {
+          ws.send(JSON.stringify({ type: "available_models", models: [] }));
+          return;
+        }
+
+        if (parsed.type === "get_commands") {
+          ws.send(JSON.stringify({ type: "available_commands", commands: [] }));
+          return;
+        }
+
+        if (parsed.type === "get_state") {
+          setTimeout(() => {
+            ws.send(
+              JSON.stringify({
+                type: "state",
+                model: null,
+                thinkingLevel: "off",
+                isStreaming: false,
+                messages: [
+                  {
+                    role: "assistant",
+                    content: [{ type: "text", text: "live synced message" }],
+                    timestamp: Date.now(),
+                  },
+                ],
+                pendingMessageCount: 0,
+                systemPrompt: "",
+                tools: [],
+              }),
+            );
+          }, 350);
+        }
+      });
+    });
+
+    await openSession(page, sessionId);
+
+    await expect(page.locator("chat-view .cv-cached-banner")).toBeVisible();
+    await expect(page.locator("message-list")).toContainText("cached startup message");
+    await expect(page.locator("chat-input textarea")).toBeDisabled();
+
+    await expect(page.locator("chat-view .cv-cached-banner")).toBeHidden({
+      timeout: 5000,
+    });
+    await expect(page.locator("message-list")).toContainText("live synced message");
+    await expect(page.locator("chat-input textarea")).toBeEnabled();
+  });
+
   test("send button is disabled when input is empty", async ({ page }) => {
     await openSession(page, sessionId);
     await expect(page.locator("chat-input .send-btn.send")).toBeDisabled();

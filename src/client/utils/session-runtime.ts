@@ -43,6 +43,7 @@ export interface SessionRuntimeState {
   pendingMessageCount: number;
   pendingToolCalls: Set<string>;
   modelsLoaded: boolean;
+  hasLoadedState: boolean;
 }
 
 export type SessionRuntimeListener = (state: SessionRuntimeState) => void;
@@ -93,6 +94,7 @@ export class SessionRuntime {
     pendingMessageCount: 0,
     pendingToolCalls: new Set(),
     modelsLoaded: false,
+    hasLoadedState: false,
   };
 
   private pendingToolCalls = new Set<string>();
@@ -267,6 +269,7 @@ export class SessionRuntime {
       autoCompactionEnabled: msg.autoCompactionEnabled === true,
       pendingMessageCount: msg.pendingMessageCount || 0,
       tools: msg.tools || [],
+      hasLoadedState: true,
     };
 
     if (incomingMessages.length > 0 || this.state.baseMessages.length === 0) {
