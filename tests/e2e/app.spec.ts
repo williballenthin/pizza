@@ -577,6 +577,13 @@ test.describe("Chat View", () => {
         timeout: 5000,
       })
       .toBeGreaterThan(0);
+
+    const inputBox = await page.locator("chat-input textarea").boundingBox();
+    const popoverBox = await page.locator("chat-input .commands-popover").boundingBox();
+
+    expect(inputBox).not.toBeNull();
+    expect(popoverBox).not.toBeNull();
+    expect(popoverBox!.y + popoverBox!.height).toBeLessThanOrEqual(inputBox!.y + 2);
   });
 
   test("renders extension confirm request and sends response", async ({ page }) => {

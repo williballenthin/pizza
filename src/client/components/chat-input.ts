@@ -40,12 +40,14 @@ export class ChatInput extends LitElement {
       flex-shrink: 0;
       width: 100%;
       min-width: 0;
-      overflow: hidden;
+      overflow-x: hidden;
+      overflow-y: visible;
       border-top: 1px solid var(--borderSubtle, var(--borderMuted, #505050));
       border-bottom: 1px solid var(--borderSubtle, var(--borderMuted, #505050));
       background: var(--surface);
       font-family: var(--font, ui-monospace, monospace);
       position: relative;
+      z-index: 8;
     }
 
     *,
@@ -277,7 +279,7 @@ export class ChatInput extends LitElement {
       box-shadow: var(--shadow-lg);
       max-height: 260px;
       overflow: auto;
-      z-index: 20;
+      z-index: 40;
     }
 
     .commands-popover-header {

@@ -212,6 +212,7 @@ Each tool call block shows:
   - On mobile, the virtual keyboard's "Send" / "Return" action sends the message.
 - **Send button**: To the right of the input area. Visually prominent. Disabled when the input is empty.
 - **Draft persistence**: Draft text is persisted per-session in browser storage and restored after tab discard/reload. Sending a message clears the persisted draft for that session.
+- **Slash command autocomplete**: While the first token starts with `/` and has no arguments yet, the client shows a command suggestion popup anchored to the composer. The popup must render above the message list so entries remain visible and clickable.
 - **Stop button**: While the agent is streaming, the Send button transforms into a **Stop** button (e.g., square icon). Tapping it sends an abort command to the agent, stopping the current response.
 
 ### Steer / Interrupt Behavior
