@@ -78,6 +78,21 @@ export function createRouter(sessions: SessionManager): Router {
     }
   });
 
+  router.get("/sessions/:id", async (req, res) => {
+    try {
+      const session = await sessions.getSessionMeta(req.params.id);
+      if (!session) {
+        res.status(404).json({ error: "Session not found" });
+        return;
+      }
+      res.json(session);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to load session";
+      console.error(`[GET /sessions/${req.params.id}] ${message}`);
+      res.status(500).json({ error: message });
+    }
+  });
+
   router.patch("/sessions/:id", async (req, res) => {
     try {
       const result = await sessions.updateSession(req.params.id, req.body);

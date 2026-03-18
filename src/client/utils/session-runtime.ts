@@ -173,10 +173,9 @@ export class SessionRuntime {
 
   private async fetchActivityStatus() {
     try {
-      const res = await fetch("/api/sessions");
+      const res = await fetch(`/api/sessions/${encodeURIComponent(this.sessionId)}`);
       if (!res.ok) return;
-      const data = await res.json();
-      const session = data.sessions?.find((s: any) => s.id === this.sessionId);
+      const session = await res.json();
       if (session?.activity) {
         this.updateState({ isAgentWorking: session.activity.isWorking });
       }

@@ -1,5 +1,5 @@
 import { readdir, readFile, rm, mkdir, appendFile, stat } from "fs/promises";
-import { join, basename } from "path";
+import { join, basename, isAbsolute } from "path";
 import { homedir } from "os";
 import { RpcProcess } from "./rpc-process.js";
 import type {
@@ -77,27 +77,7 @@ export class SessionManager {
     for (const parsed of diskSessions) {
       if (Date.now() - Date.parse(parsed.lastActivityAt) > SEVEN_DAYS_MS) continue;
       seen.add(parsed.id);
-
-      const home = homedir();
-      const cwdDisplay = parsed.cwd.startsWith(home)
-        ? "~" + parsed.cwd.slice(home.length)
-        : parsed.cwd;
-
-      sessions.push(
-        this.decorateWithActivity(
-          {
-            id: parsed.id,
-            name: parsed.name || fallbackName(parsed.id),
-            createdAt: parsed.createdAt,
-            lastActivityAt: parsed.lastActivityAt,
-            messageStats: parsed.messageStats,
-            model: parsed.model,
-            cwd: cwdDisplay,
-            cwdRaw: parsed.cwd,
-          },
-          now,
-        ),
-      );
+      sessions.push(this.buildSessionMetaFromParsed(parsed, now));
     }
 
     for (const [, entry] of this.active) {
@@ -108,25 +88,7 @@ export class SessionManager {
           existing.activity = this.computeActivity(existing, now);
         }
       } else {
-        const home = homedir();
-        const cwdDisplay = entry.cwd.startsWith(home)
-          ? "~" + entry.cwd.slice(home.length)
-          : entry.cwd;
-
-        sessions.push(
-          this.decorateWithActivity(
-            {
-              id: entry.sessionId,
-              name: entry.name || "New Session",
-              createdAt: entry.createdAt,
-              lastActivityAt: entry.createdAt,
-              messageStats: emptyMessageStats(),
-              cwd: cwdDisplay,
-              cwdRaw: entry.cwd,
-            },
-            now,
-          ),
-        );
+        sessions.push(this.buildSessionMetaFromActive(entry, now));
       }
     }
 
@@ -137,6 +99,37 @@ export class SessionManager {
     );
 
     return sessions;
+  }
+
+  async getSessionMeta(sessionId: string): Promise<SessionMeta | null> {
+    const now = Date.now();
+    this.pruneRecentClientActivity(now);
+
+    const active = this.active.get(sessionId);
+    const loc = active?.sessionFile
+      ? {
+          bucketDir: active.bucketDir,
+          file: basename(this.resolveActiveSessionFilePath(active) || active.sessionFile),
+        }
+      : await this.findSessionFile(sessionId);
+
+    if (loc) {
+      const cwd = await decodeCwd(basename(loc.bucketDir));
+      if (cwd) {
+        const parsed = await this.parseSessionFile(loc.file, loc.bucketDir, cwd);
+        if (parsed) {
+          const meta = this.buildSessionMetaFromParsed(parsed, now);
+          if (active?.name) {
+            meta.name = active.name;
+            meta.activity = this.computeActivity(meta, now);
+          }
+          return meta;
+        }
+      }
+    }
+
+    if (!active) return null;
+    return this.buildSessionMetaFromActive(active, now);
   }
 
   async createSession(cwd: string): Promise<string> {
@@ -655,6 +648,60 @@ export class SessionManager {
       ...meta,
       activity: this.computeActivity(meta, now),
     };
+  }
+
+  private buildSessionMetaFromParsed(
+    parsed: ParsedSessionFile,
+    now: number,
+  ): SessionMeta {
+    const home = homedir();
+    const cwdDisplay = parsed.cwd.startsWith(home)
+      ? "~" + parsed.cwd.slice(home.length)
+      : parsed.cwd;
+
+    return this.decorateWithActivity(
+      {
+        id: parsed.id,
+        name: parsed.name || fallbackName(parsed.id),
+        createdAt: parsed.createdAt,
+        lastActivityAt: parsed.lastActivityAt,
+        messageStats: parsed.messageStats,
+        model: parsed.model,
+        cwd: cwdDisplay,
+        cwdRaw: parsed.cwd,
+      },
+      now,
+    );
+  }
+
+  private buildSessionMetaFromActive(
+    entry: ActiveSession,
+    now: number,
+  ): SessionMeta {
+    const home = homedir();
+    const cwdDisplay = entry.cwd.startsWith(home)
+      ? "~" + entry.cwd.slice(home.length)
+      : entry.cwd;
+
+    return this.decorateWithActivity(
+      {
+        id: entry.sessionId,
+        name: entry.name || "New Session",
+        createdAt: entry.createdAt,
+        lastActivityAt: entry.createdAt,
+        messageStats: emptyMessageStats(),
+        cwd: cwdDisplay,
+        cwdRaw: entry.cwd,
+      },
+      now,
+    );
+  }
+
+  private resolveActiveSessionFilePath(entry: ActiveSession): string | null {
+    if (!entry.sessionFile) return null;
+    return isAbsolute(entry.sessionFile)
+      ? entry.sessionFile
+      : join(entry.bucketDir, entry.sessionFile);
   }
 
   private computeActivity(

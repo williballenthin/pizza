@@ -263,6 +263,17 @@ describe("Session listing from JSONL files", () => {
     expect(data.sessions[1].id).toBe("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
   });
 
+  it("GET /api/sessions/:id returns metadata for a single session", async () => {
+    const res = await fetch(
+      `${baseUrl}/api/sessions/11111111-2222-3333-4444-555555555555`,
+    );
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.id).toBe("11111111-2222-3333-4444-555555555555");
+    expect(data.name).toBe("Tell me about TypeScript generics and how they work");
+    expect(data.cwdRaw).toBe(cwdDir);
+  });
+
   it("DELETE removes a JSONL session", async () => {
     const id = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee";
     const res = await fetch(`${baseUrl}/api/sessions/${id}`, {

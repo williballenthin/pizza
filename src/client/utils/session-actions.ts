@@ -48,11 +48,9 @@ export interface GitCommitSummary {
 
 export async function fetchSessionInfo(sessionId: string): Promise<SessionInfo | null> {
   try {
-    const res = await fetch("/api/sessions");
+    const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`);
     if (!res.ok) return null;
-    const data = await res.json();
-    const session = data.sessions.find((s: any) => s.id === sessionId);
-    if (!session) return null;
+    const session = await res.json();
 
     return {
       name: session.name || "Session",
