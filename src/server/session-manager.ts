@@ -148,6 +148,7 @@ export class SessionManager {
       this.config.piCommand,
       cwd,
       undefined,
+      bucketDir,
       env,
     );
 
@@ -245,7 +246,7 @@ export class SessionManager {
   async deleteSession(id: string): Promise<boolean> {
     const active = this.active.get(id);
     if (active) {
-      active.rpc.stop();
+      await active.rpc.stop();
       if (active.idleTimer) clearTimeout(active.idleTimer);
       this.active.delete(id);
     }
@@ -291,7 +292,10 @@ export class SessionManager {
     }
 
     const loc = await this.findSessionFile(sessionId);
-    const cwd = loc ? (await decodeCwd(loc.bucketDir.split("/").pop()!) ?? process.cwd()) : process.cwd();
+    const bucketName = loc ? basename(loc.bucketDir) : undefined;
+    const cwd = loc
+      ? (await decodeCwd(bucketName) ?? process.cwd())
+      : process.cwd();
     const bucketDir = loc ? loc.bucketDir : join(this.config.sessionsRoot, encodeCwd(cwd));
 
     const env = this.buildEnv();

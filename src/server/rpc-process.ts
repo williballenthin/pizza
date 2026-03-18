@@ -28,6 +28,8 @@ export class RpcProcess extends EventEmitter {
     const args = ["--mode", "rpc"];
     if (this.sessionFile) {
       args.push("--session", this.sessionFile);
+    } else if (this.sessionDir) {
+      args.push("--session-dir", this.sessionDir);
     }
 
     this.lastError = null;
@@ -137,12 +139,34 @@ export class RpcProcess extends EventEmitter {
     });
   }
 
-  stop(): void {
-    if (this.proc && this._alive) {
-      this.proc.stdin!.end();
-      this.proc.kill("SIGTERM");
+  async stop(timeoutMs = 5000): Promise<void> {
+    const proc = this.proc;
+    if (!proc) return;
+
+    const exited = waitForProcessExit(proc, timeoutMs, () => {
+      try {
+        proc.kill("SIGKILL");
+      } catch {
+        // Ignore kill failures during shutdown.
+      }
+    });
+
+    if (this._alive) {
+      try {
+        proc.stdin?.end();
+      } catch {
+        // Ignore stdin shutdown failures.
+      }
+
+      try {
+        proc.kill("SIGTERM");
+      } catch {
+        // Ignore kill failures during shutdown.
+      }
       this._alive = false;
     }
+
+    await exited;
   }
 
   kill(): void {

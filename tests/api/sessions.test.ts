@@ -85,6 +85,40 @@ async function makeSessionsRoot(cwdDir: string): Promise<{ sessionsRoot: string;
   return { sessionsRoot, bucketDir };
 }
 
+async function makeFakePiCommand(): Promise<{ command: string; dir: string }> {
+  const dir = await mkdtemp(join(tmpdir(), "pi-web-fake-pi-"));
+  const scriptName = process.platform === "win32" ? "fake-pi.cmd" : "fake-pi.sh";
+  const command = join(dir, scriptName);
+
+  if (process.platform === "win32") {
+    await writeFile(command, "@echo off\r\ntimeout /t 30 /nobreak >nul\r\n");
+  } else {
+    await writeFile(command, "#!/usr/bin/env sh\nsleep 30\n");
+    await chmod(command, 0o755);
+  }
+
+  return { command, dir };
+}
+
+async function rmWithRetry(path: string): Promise<void> {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      await rm(path, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      if (
+        !(error instanceof Error) ||
+        !("code" in error) ||
+        error.code !== "EBUSY" ||
+        attempt === 4
+      ) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+  }
+}
+
 describe("GET /api/health", () => {
   let app: AppInstance;
   let baseUrl: string;
@@ -111,8 +145,8 @@ describe("GET /api/health", () => {
 
   afterAll(async () => {
     await app.close();
-    await rm(sessionsRoot, { recursive: true, force: true });
-    await rm(cwdDir, { recursive: true, force: true });
+    await rmWithRetry(sessionsRoot);
+    await rmWithRetry(cwdDir);
   });
 
   it("returns status ok", async () => {
@@ -183,8 +217,8 @@ describe("Session listing from JSONL files", () => {
 
   afterAll(async () => {
     await app.close();
-    await rm(sessionsRoot, { recursive: true, force: true });
-    await rm(cwdDir, { recursive: true, force: true });
+    await rmWithRetry(sessionsRoot);
+    await rmWithRetry(cwdDir);
   });
 
   it("lists sessions from JSONL files with correct metadata", async () => {
@@ -302,8 +336,8 @@ describe("Session creation errors", () => {
 
   afterAll(async () => {
     await app.close();
-    await rm(sessionsRoot, { recursive: true, force: true });
-    await rm(cwdDir, { recursive: true, force: true });
+    await rmWithRetry(sessionsRoot);
+    await rmWithRetry(cwdDir);
   });
 
   it("returns 500 instead of crashing when pi cannot be spawned", async () => {
@@ -319,6 +353,56 @@ describe("Session creation errors", () => {
 
     const healthRes = await fetch(`${baseUrl}/api/health`);
     expect(healthRes.status).toBe(200);
+  });
+});
+
+describe("Session respawn cwd", () => {
+  let app: AppInstance;
+  let sessionsRoot: string;
+  let cwdDir: string;
+  let fakePiDir: string;
+
+  beforeAll(async () => {
+    cwdDir = await mkdtemp(join(tmpdir(), "pi-web-cwd-"));
+    const result = await makeSessionsRoot(cwdDir);
+    sessionsRoot = result.sessionsRoot;
+
+    const sessionId = "12345678-1234-1234-1234-123456789abc";
+    await writeFile(
+      join(result.bucketDir, `seed_${sessionId}.jsonl`),
+      makeSessionJsonl(sessionId, {
+        timestamp: new Date().toISOString(),
+      }),
+    );
+
+    const fakePi = await makeFakePiCommand();
+    fakePiDir = fakePi.dir;
+
+    const config: ServerConfig = {
+      port: 0,
+      sessionsRoot,
+      idleTimeoutMs: 5000,
+      piCommand: fakePi.command,
+    };
+    app = createApp(config);
+  });
+
+  afterAll(async () => {
+    await app.close();
+    await rmWithRetry(sessionsRoot);
+    await rmWithRetry(cwdDir);
+    await rmWithRetry(fakePiDir);
+  });
+
+  it("uses the session's stored cwd when respawning", async () => {
+    const listener = () => {};
+    const { cwd } = await app.sessions.getOrSpawn(
+      "12345678-1234-1234-1234-123456789abc",
+      listener,
+    );
+
+    expect(cwd).toBe(cwdDir);
+    app.sessions.detach("12345678-1234-1234-1234-123456789abc", listener);
   });
 });
 
@@ -354,8 +438,8 @@ describe("Session CRUD with real pi", () => {
 
   afterAll(async () => {
     await app.close();
-    await rm(sessionsRoot, { recursive: true, force: true });
-    await rm(cwdDir, { recursive: true, force: true });
+    await rmWithRetry(sessionsRoot);
+    await rmWithRetry(cwdDir);
   });
 
   let createdId: string;
@@ -454,8 +538,8 @@ describe("Session name fallbacks", () => {
 
   afterAll(async () => {
     await app.close();
-    await rm(sessionsRoot, { recursive: true, force: true });
-    await rm(cwdDir, { recursive: true, force: true });
+    await rmWithRetry(sessionsRoot);
+    await rmWithRetry(cwdDir);
   });
 
   it("uses UUID-based fallback name when no name or messages", async () => {
