@@ -1,9 +1,14 @@
 import { LitElement, html, css } from "lit";
 import { customElement, state } from "lit/decorators.js";
+import {
+  fetchSessionInfoResult,
+  type SessionInfo,
+} from "../utils/session-actions.js";
 
 type Route =
+  | { page: "loading" }
   | { page: "home" }
-  | { page: "session"; id: string; targetId?: string }
+  | { page: "session"; id: string; info: SessionInfo | null; targetId?: string }
   | { page: "not-found"; id: string };
 
 /**
@@ -15,7 +20,7 @@ type Route =
  */
 @customElement("app-root")
 export class AppRoot extends LitElement {
-  @state() private route: Route = { page: "home" };
+  @state() private route: Route = { page: "loading" };
 
   override createRenderRoot() {
     return this;
@@ -48,9 +53,8 @@ export class AppRoot extends LitElement {
 
   private updateDocumentTitle() {
     switch (this.route.page) {
+      case "loading":
       case "home":
-        document.title = "pizza";
-        break;
       case "not-found":
         document.title = "pizza";
         break;
@@ -64,39 +68,28 @@ export class AppRoot extends LitElement {
   private onHashChange = async () => {
     const hash = window.location.hash || "#/";
     const sessionMatch = hash.match(/^#\/session\/([^?]+)(?:\?(.*))?$/);
-    if (sessionMatch) {
-      const id = decodeURIComponent(sessionMatch[1]);
-      const query = new URLSearchParams(sessionMatch[2] || "");
-      const targetId = query.get("target") || undefined;
-
-      // Validate session exists
-      const exists = await this.sessionExists(id);
-      if (exists) {
-        this.route = { page: "session", id, targetId };
-      } else {
-        this.route = { page: "not-found", id };
-      }
-    } else {
+    if (!sessionMatch) {
       this.route = { page: "home" };
+      return;
     }
-  };
 
-  private async sessionExists(id: string): Promise<boolean> {
-    try {
-      const res = await fetch("/api/sessions");
-      if (!res.ok) return true; // assume exists on API error
-      const data = await res.json();
-      return data.sessions.some((s: { id: string }) => s.id === id);
-    } catch {
-      return true; // assume exists on network error
-    }
-  }
+    const id = decodeURIComponent(sessionMatch[1]);
+    const query = new URLSearchParams(sessionMatch[2] || "");
+    const targetId = query.get("target") || undefined;
+
+    this.route = { page: "loading" };
+    const result = await fetchSessionInfoResult(id);
+    this.route = result.status === "not-found"
+      ? { page: "not-found", id }
+      : { page: "session", id, info: result.info, targetId };
+  };
 
   render() {
     switch (this.route.page) {
       case "session":
         return html`<chat-view
           .sessionId=${this.route.id}
+          .initialSessionInfo=${this.route.info}
           .targetMessageId=${this.route.targetId || ""}
         ></chat-view>`;
       case "not-found":
@@ -107,6 +100,8 @@ export class AppRoot extends LitElement {
             <a href="#/">Back to sessions</a>
           </div>
         `;
+      case "loading":
+        return html``;
       default:
         return html`<session-list></session-list>`;
     }

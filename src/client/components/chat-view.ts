@@ -27,9 +27,9 @@ import {
   type SidebarEntry,
 } from "../utils/message-shaping.js";
 import {
-  fetchSessionInfo,
   patchSessionName,
   stopSessionProcess,
+  type SessionInfo,
   unarchiveSessionIfNeeded,
 } from "../utils/session-actions.js";
 import { renderExtensionUiDialog } from "../utils/render-extension-ui-dialog.js";
@@ -80,6 +80,7 @@ export class ChatView extends LitElement {
   }
 
   @property({ type: String }) sessionId = "";
+  @property({ attribute: false }) initialSessionInfo: SessionInfo | null = null;
   @property({ type: String }) targetMessageId = "";
 
   @state() private runtimeState: SessionRuntimeState | null = null;
@@ -167,6 +168,10 @@ export class ChatView extends LitElement {
       this.pendingDeepLinkTarget = this.targetMessageId || "";
     }
 
+    if (changed.has("initialSessionInfo")) {
+      this.applySessionInfo(this.initialSessionInfo);
+    }
+
     if (!this.scrollContainer) {
       this.scrollContainer = this.querySelector(".cv-messages");
       this.scrollContainer?.addEventListener("scroll", this.onScroll);
@@ -237,7 +242,7 @@ export class ChatView extends LitElement {
       },
     );
     this.runtime.connect();
-    this.loadSessionName();
+    this.applySessionInfo(this.initialSessionInfo);
   }
 
   private resetSessionState() {
@@ -514,10 +519,8 @@ export class ChatView extends LitElement {
     this.runtime?.send({ type: "set_follow_up_mode", mode: e.detail });
   }
 
-  private async loadSessionName() {
-    const requestedSessionId = this.sessionId;
-    const info = await fetchSessionInfo(requestedSessionId);
-    if (!info || requestedSessionId !== this.sessionId) return;
+  private applySessionInfo(info: SessionInfo | null) {
+    if (!info) return;
 
     this.sessionName = info.name;
     this.sessionCreatedAt = info.createdAt;
@@ -526,7 +529,10 @@ export class ChatView extends LitElement {
     if (info.cwd) this.hostCwd = info.cwd;
 
     // Keep runtime/session callback in sync even when WS state omits sessionName.
-    this.runtime?.optimisticUpdate({ sessionName: info.name });
+    this.runtime?.optimisticUpdate({
+      sessionName: info.name,
+      ...(info.activity ? { isAgentWorking: info.activity.isWorking } : {}),
+    });
     this.updateDocumentTitle();
   }
 
