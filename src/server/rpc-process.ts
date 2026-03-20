@@ -1,6 +1,6 @@
 import { ChildProcess, spawn } from "child_process";
 import { EventEmitter } from "events";
-import type { RpcEvent } from "@shared/types.js";
+import type { RpcEvent } from "../shared/types.js";
 
 export class RpcProcess extends EventEmitter {
   private proc: ChildProcess | null = null;

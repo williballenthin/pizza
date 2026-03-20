@@ -12,7 +12,7 @@ import type {
   ImageContent,
   AgentMessageData,
   SessionMessageStats,
-} from "@shared/types.js";
+} from "../shared/types.js";
 
 type PendingCommand =
   | { kind: "get_state" }

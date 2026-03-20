@@ -9,8 +9,12 @@ import type {
   RpcEvent,
   SessionActivityState,
   AgentMessageData,
-} from "@shared/types.js";
-import { countMessageStats, emptyMessageStats, type JsonlMessageEntry } from "@shared/session-stats.js";
+} from "../shared/types.js";
+import {
+  countMessageStats,
+  emptyMessageStats,
+  type JsonlMessageEntry,
+} from "../shared/session-stats.js";
 import type { ServerConfig } from "./config.js";
 import { encodeCwd } from "./config.js";
 import { decodeCwd } from "./project-registry.js";
