@@ -2,15 +2,17 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { createApp, type AppInstance } from "../../src/server/app.js";
 import type { ServerConfig } from "../../src/server/config.js";
 import { encodeCwd } from "../../src/server/config.js";
-import { mkdtemp, rm, writeFile, mkdir } from "fs/promises";
+import { chmod, mkdtemp, rm, writeFile, mkdir } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 import { execSync } from "child_process";
 import type { AddressInfo } from "net";
 
+const CONFIGURED_PI_COMMAND = process.env.PI_COMMAND || "pi";
+
 function hasPi(): boolean {
   try {
-    execSync("pi --version", { stdio: "ignore" });
+    execSync(`${CONFIGURED_PI_COMMAND} --version`, { stdio: "ignore" });
     return true;
   } catch {
     return false;
@@ -97,7 +99,7 @@ describe("GET /api/health", () => {
       port: 0,
       sessionsRoot,
       idleTimeoutMs: 5000,
-      piCommand: "pi",
+      piCommand: process.env.PI_COMMAND || "pi",
     };
     app = createApp(config);
     await new Promise<void>((resolve) => {
@@ -169,7 +171,7 @@ describe("Session listing from JSONL files", () => {
       port: 0,
       sessionsRoot,
       idleTimeoutMs: 5000,
-      piCommand: "pi",
+      piCommand: process.env.PI_COMMAND || "pi",
     };
     app = createApp(config);
     await new Promise<void>((resolve) => {
@@ -273,6 +275,53 @@ describe("Session listing from JSONL files", () => {
   });
 });
 
+describe("Session creation errors", () => {
+  let app: AppInstance;
+  let baseUrl: string;
+  let sessionsRoot: string;
+  let cwdDir: string;
+
+  beforeAll(async () => {
+    cwdDir = await mkdtemp(join(tmpdir(), "pi-web-cwd-"));
+    const result = await makeSessionsRoot(cwdDir);
+    sessionsRoot = result.sessionsRoot;
+
+    const config: ServerConfig = {
+      port: 0,
+      sessionsRoot,
+      idleTimeoutMs: 5000,
+      piCommand: "definitely-missing-pi-command",
+    };
+    app = createApp(config);
+    await new Promise<void>((resolve) => {
+      app.server.listen(0, () => resolve());
+    });
+    const addr = app.server.address() as AddressInfo;
+    baseUrl = `http://localhost:${addr.port}`;
+  });
+
+  afterAll(async () => {
+    await app.close();
+    await rm(sessionsRoot, { recursive: true, force: true });
+    await rm(cwdDir, { recursive: true, force: true });
+  });
+
+  it("returns 500 instead of crashing when pi cannot be spawned", async () => {
+    const res = await fetch(`${baseUrl}/api/sessions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cwd: cwdDir }),
+    });
+
+    expect(res.status).toBe(500);
+    const data = await res.json();
+    expect(data.error).toMatch(/spawn|RPC process/i);
+
+    const healthRes = await fetch(`${baseUrl}/api/health`);
+    expect(healthRes.status).toBe(200);
+  });
+});
+
 describe("Session CRUD with real pi", () => {
   if (!PI_AVAILABLE) {
     it.skip("pi not installed — skipping real session tests", () => {});
@@ -293,7 +342,7 @@ describe("Session CRUD with real pi", () => {
       port: 0,
       sessionsRoot,
       idleTimeoutMs: 30000,
-      piCommand: "pi",
+      piCommand: process.env.PI_COMMAND || "pi",
     };
     app = createApp(config);
     await new Promise<void>((resolve) => {
@@ -393,7 +442,7 @@ describe("Session name fallbacks", () => {
       port: 0,
       sessionsRoot,
       idleTimeoutMs: 5000,
-      piCommand: "pi",
+      piCommand: process.env.PI_COMMAND || "pi",
     };
     app = createApp(config);
     await new Promise<void>((resolve) => {

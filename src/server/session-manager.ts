@@ -151,32 +151,45 @@ export class SessionManager {
       env,
     );
 
-    rpc.start();
-
-    const response = await rpc.sendAndWait({ type: "get_state" }, 15000);
-    const data = response.data as { sessionId: string; sessionFile?: string };
-    const sessionId = data.sessionId;
-    const sessionFile = data.sessionFile;
-
-    const entry: ActiveSession = {
-      rpc,
-      sessionId,
-      sessionFile,
-      bucketDir,
-      cwd,
-      name: undefined,
-      createdAt: new Date().toISOString(),
-      idleTimer: null,
-      clients: new Set(),
-      isAgentWorking: false,
+    let startupError: Error | null = null;
+    const captureStartupError = (err: Error) => {
+      startupError = err;
     };
+    rpc.on("error", captureStartupError);
 
-    this.bindRpcHandlers(entry);
+    try {
+      rpc.start();
 
-    this.startIdleTimer(sessionId, entry);
-    this.active.set(sessionId, entry);
+      const response = await rpc.sendAndWait({ type: "get_state" }, 15000);
+      const data = response.data as { sessionId: string; sessionFile?: string };
+      const sessionId = data.sessionId;
+      const sessionFile = data.sessionFile;
 
-    return sessionId;
+      const entry: ActiveSession = {
+        rpc,
+        sessionId,
+        sessionFile,
+        bucketDir,
+        cwd,
+        name: undefined,
+        createdAt: new Date().toISOString(),
+        idleTimer: null,
+        clients: new Set(),
+        isAgentWorking: false,
+      };
+
+      rpc.removeListener("error", captureStartupError);
+      this.bindRpcHandlers(entry);
+
+      this.startIdleTimer(sessionId, entry);
+      this.active.set(sessionId, entry);
+
+      return sessionId;
+    } catch (err) {
+      rpc.removeListener("error", captureStartupError);
+      rpc.stop();
+      throw startupError ?? err;
+    }
   }
 
   async getSessionCwd(sessionId: string): Promise<string | null> {
