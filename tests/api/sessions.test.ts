@@ -2,15 +2,17 @@ import { describe, it, expect, beforeAll, afterAll } from "vitest";
 import { createApp, type AppInstance } from "../../src/server/app.js";
 import type { ServerConfig } from "../../src/server/config.js";
 import { encodeCwd } from "../../src/server/config.js";
-import { mkdtemp, rm, writeFile, mkdir } from "fs/promises";
+import { chmod, mkdtemp, rm, writeFile, mkdir } from "fs/promises";
 import { tmpdir } from "os";
 import { join } from "path";
 import { execSync } from "child_process";
 import type { AddressInfo } from "net";
 
+const CONFIGURED_PI_COMMAND = process.env.PI_COMMAND || "pi";
+
 function hasPi(): boolean {
   try {
-    execSync("pi --version", { stdio: "ignore" });
+    execSync(`${CONFIGURED_PI_COMMAND} --version`, { stdio: "ignore" });
     return true;
   } catch {
     return false;
@@ -83,6 +85,40 @@ async function makeSessionsRoot(cwdDir: string): Promise<{ sessionsRoot: string;
   return { sessionsRoot, bucketDir };
 }
 
+async function makeFakePiCommand(): Promise<{ command: string; dir: string }> {
+  const dir = await mkdtemp(join(tmpdir(), "pi-web-fake-pi-"));
+  const scriptName = process.platform === "win32" ? "fake-pi.cmd" : "fake-pi.sh";
+  const command = join(dir, scriptName);
+
+  if (process.platform === "win32") {
+    await writeFile(command, "@echo off\r\ntimeout /t 30 /nobreak >nul\r\n");
+  } else {
+    await writeFile(command, "#!/usr/bin/env sh\nsleep 30\n");
+    await chmod(command, 0o755);
+  }
+
+  return { command, dir };
+}
+
+async function rmWithRetry(path: string): Promise<void> {
+  for (let attempt = 0; attempt < 5; attempt++) {
+    try {
+      await rm(path, { recursive: true, force: true });
+      return;
+    } catch (error) {
+      if (
+        !(error instanceof Error) ||
+        !("code" in error) ||
+        error.code !== "EBUSY" ||
+        attempt === 4
+      ) {
+        throw error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    }
+  }
+}
+
 describe("GET /api/health", () => {
   let app: AppInstance;
   let baseUrl: string;
@@ -97,7 +133,7 @@ describe("GET /api/health", () => {
       port: 0,
       sessionsRoot,
       idleTimeoutMs: 5000,
-      piCommand: "pi",
+      piCommand: process.env.PI_COMMAND || "pi",
     };
     app = createApp(config);
     await new Promise<void>((resolve) => {
@@ -109,8 +145,8 @@ describe("GET /api/health", () => {
 
   afterAll(async () => {
     await app.close();
-    await rm(sessionsRoot, { recursive: true, force: true });
-    await rm(cwdDir, { recursive: true, force: true });
+    await rmWithRetry(sessionsRoot);
+    await rmWithRetry(cwdDir);
   });
 
   it("returns status ok", async () => {
@@ -169,7 +205,7 @@ describe("Session listing from JSONL files", () => {
       port: 0,
       sessionsRoot,
       idleTimeoutMs: 5000,
-      piCommand: "pi",
+      piCommand: process.env.PI_COMMAND || "pi",
     };
     app = createApp(config);
     await new Promise<void>((resolve) => {
@@ -181,8 +217,8 @@ describe("Session listing from JSONL files", () => {
 
   afterAll(async () => {
     await app.close();
-    await rm(sessionsRoot, { recursive: true, force: true });
-    await rm(cwdDir, { recursive: true, force: true });
+    await rmWithRetry(sessionsRoot);
+    await rmWithRetry(cwdDir);
   });
 
   it("lists sessions from JSONL files with correct metadata", async () => {
@@ -225,6 +261,17 @@ describe("Session listing from JSONL files", () => {
     const data = await res.json();
     expect(data.sessions[0].id).toBe("11111111-2222-3333-4444-555555555555");
     expect(data.sessions[1].id).toBe("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee");
+  });
+
+  it("GET /api/sessions/:id returns metadata for a single session", async () => {
+    const res = await fetch(
+      `${baseUrl}/api/sessions/11111111-2222-3333-4444-555555555555`,
+    );
+    expect(res.status).toBe(200);
+    const data = await res.json();
+    expect(data.id).toBe("11111111-2222-3333-4444-555555555555");
+    expect(data.name).toBe("Tell me about TypeScript generics and how they work");
+    expect(data.cwdRaw).toBe(cwdDir);
   });
 
   it("DELETE removes a JSONL session", async () => {
@@ -271,6 +318,110 @@ describe("Session listing from JSONL files", () => {
     });
     expect(res.status).toBe(404);
   });
+
+  it("POST /api/sessions/:id/stop returns 404 for unknown session", async () => {
+    const res = await fetch(`${baseUrl}/api/sessions/nonexistent-id/stop`, {
+      method: "POST",
+    });
+    expect(res.status).toBe(404);
+  });
+});
+
+describe("Session creation errors", () => {
+  let app: AppInstance;
+  let baseUrl: string;
+  let sessionsRoot: string;
+  let cwdDir: string;
+
+  beforeAll(async () => {
+    cwdDir = await mkdtemp(join(tmpdir(), "pi-web-cwd-"));
+    const result = await makeSessionsRoot(cwdDir);
+    sessionsRoot = result.sessionsRoot;
+
+    const config: ServerConfig = {
+      port: 0,
+      sessionsRoot,
+      idleTimeoutMs: 5000,
+      piCommand: "definitely-missing-pi-command",
+    };
+    app = createApp(config);
+    await new Promise<void>((resolve) => {
+      app.server.listen(0, () => resolve());
+    });
+    const addr = app.server.address() as AddressInfo;
+    baseUrl = `http://localhost:${addr.port}`;
+  });
+
+  afterAll(async () => {
+    await app.close();
+    await rmWithRetry(sessionsRoot);
+    await rmWithRetry(cwdDir);
+  });
+
+  it("returns 500 instead of crashing when pi cannot be spawned", async () => {
+    const res = await fetch(`${baseUrl}/api/sessions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cwd: cwdDir }),
+    });
+
+    expect(res.status).toBe(500);
+    const data = await res.json();
+    expect(data.error).toMatch(/spawn|RPC process/i);
+
+    const healthRes = await fetch(`${baseUrl}/api/health`);
+    expect(healthRes.status).toBe(200);
+  });
+});
+
+describe("Session respawn cwd", () => {
+  let app: AppInstance;
+  let sessionsRoot: string;
+  let cwdDir: string;
+  let fakePiDir: string;
+
+  beforeAll(async () => {
+    cwdDir = await mkdtemp(join(tmpdir(), "pi-web-cwd-"));
+    const result = await makeSessionsRoot(cwdDir);
+    sessionsRoot = result.sessionsRoot;
+
+    const sessionId = "12345678-1234-1234-1234-123456789abc";
+    await writeFile(
+      join(result.bucketDir, `seed_${sessionId}.jsonl`),
+      makeSessionJsonl(sessionId, {
+        timestamp: new Date().toISOString(),
+      }),
+    );
+
+    const fakePi = await makeFakePiCommand();
+    fakePiDir = fakePi.dir;
+
+    const config: ServerConfig = {
+      port: 0,
+      sessionsRoot,
+      idleTimeoutMs: 5000,
+      piCommand: fakePi.command,
+    };
+    app = createApp(config);
+  });
+
+  afterAll(async () => {
+    await app.close();
+    await rmWithRetry(sessionsRoot);
+    await rmWithRetry(cwdDir);
+    await rmWithRetry(fakePiDir);
+  });
+
+  it("uses the session's stored cwd when respawning", async () => {
+    const listener = () => {};
+    const { cwd } = await app.sessions.getOrSpawn(
+      "12345678-1234-1234-1234-123456789abc",
+      listener,
+    );
+
+    expect(cwd).toBe(cwdDir);
+    app.sessions.detach("12345678-1234-1234-1234-123456789abc", listener);
+  });
 });
 
 describe("Session CRUD with real pi", () => {
@@ -293,7 +444,7 @@ describe("Session CRUD with real pi", () => {
       port: 0,
       sessionsRoot,
       idleTimeoutMs: 30000,
-      piCommand: "pi",
+      piCommand: process.env.PI_COMMAND || "pi",
     };
     app = createApp(config);
     await new Promise<void>((resolve) => {
@@ -305,8 +456,8 @@ describe("Session CRUD with real pi", () => {
 
   afterAll(async () => {
     await app.close();
-    await rm(sessionsRoot, { recursive: true, force: true });
-    await rm(cwdDir, { recursive: true, force: true });
+    await rmWithRetry(sessionsRoot);
+    await rmWithRetry(cwdDir);
   });
 
   let createdId: string;
@@ -366,6 +517,25 @@ describe("Session CRUD with real pi", () => {
     );
     expect(session).toBeUndefined();
   });
+
+  it("POST /api/sessions/:id/stop stops the active RPC session", async () => {
+    const createRes = await fetch(`${baseUrl}/api/sessions`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cwd: cwdDir }),
+    });
+    expect(createRes.status).toBe(201);
+    const { id } = await createRes.json();
+
+    const res = await fetch(`${baseUrl}/api/sessions/${id}/stop`, {
+      method: "POST",
+    });
+    expect(res.status).toBe(204);
+
+    const healthRes = await fetch(`${baseUrl}/api/health`);
+    const health = await healthRes.json();
+    expect(health.activeSessions).toBe(0);
+  });
 }, 30000);
 
 describe("Session name fallbacks", () => {
@@ -393,7 +563,7 @@ describe("Session name fallbacks", () => {
       port: 0,
       sessionsRoot,
       idleTimeoutMs: 5000,
-      piCommand: "pi",
+      piCommand: process.env.PI_COMMAND || "pi",
     };
     app = createApp(config);
     await new Promise<void>((resolve) => {
@@ -405,8 +575,8 @@ describe("Session name fallbacks", () => {
 
   afterAll(async () => {
     await app.close();
-    await rm(sessionsRoot, { recursive: true, force: true });
-    await rm(cwdDir, { recursive: true, force: true });
+    await rmWithRetry(sessionsRoot);
+    await rmWithRetry(cwdDir);
   });
 
   it("uses UUID-based fallback name when no name or messages", async () => {

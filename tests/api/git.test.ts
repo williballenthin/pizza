@@ -90,7 +90,7 @@ describe("Git API endpoints", () => {
       port: 0,
       sessionsRoot,
       idleTimeoutMs: 5000,
-      piCommand: "pi",
+      piCommand: process.env.PI_COMMAND || "pi",
     };
     app = createApp(config);
     await new Promise<void>((resolve) => {

@@ -78,6 +78,21 @@ export function createRouter(sessions: SessionManager): Router {
     }
   });
 
+  router.get("/sessions/:id", async (req, res) => {
+    try {
+      const session = await sessions.getSessionMeta(req.params.id);
+      if (!session) {
+        res.status(404).json({ error: "Session not found" });
+        return;
+      }
+      res.json(session);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to load session";
+      console.error(`[GET /sessions/${req.params.id}] ${message}`);
+      res.status(500).json({ error: message });
+    }
+  });
+
   router.patch("/sessions/:id", async (req, res) => {
     try {
       const result = await sessions.updateSession(req.params.id, req.body);
@@ -104,6 +119,25 @@ export function createRouter(sessions: SessionManager): Router {
     } catch (err) {
       const message = err instanceof Error ? err.message : "Failed to delete session";
       console.error(`[DELETE /sessions/${req.params.id}] ${message}`);
+      res.status(500).json({ error: message });
+    }
+  });
+
+  router.post("/sessions/:id/stop", async (req, res) => {
+    try {
+      const reason =
+        typeof req.query.reason === "string" && req.query.reason.trim()
+          ? req.query.reason.trim()
+          : "api_stop";
+      const ok = await sessions.stopSession(req.params.id, reason);
+      if (!ok) {
+        res.status(404).json({ error: "Session not found" });
+        return;
+      }
+      res.status(204).send();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to stop session";
+      console.error(`[POST /sessions/${req.params.id}/stop] ${message}`);
       res.status(500).json({ error: message });
     }
   });

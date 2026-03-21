@@ -64,13 +64,13 @@ export function createApp(config: ServerConfig): AppInstance {
     });
   });
 
-  const close = (): Promise<void> => {
-    return new Promise((resolve) => {
-      sessions.shutdown();
-      wss.close();
-      // Close all existing connections before closing the server
-      wss.clients.forEach((client) => client.terminate());
-      server.closeAllConnections();
+  const close = async (): Promise<void> => {
+    await sessions.shutdown();
+    wss.close();
+    // Close all existing connections before closing the server
+    wss.clients.forEach((client) => client.terminate());
+    server.closeAllConnections();
+    await new Promise<void>((resolve) => {
       server.close(() => resolve());
     });
   };

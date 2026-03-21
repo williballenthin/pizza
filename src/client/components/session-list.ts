@@ -407,19 +407,26 @@ export class SessionList extends LitElement {
     }
 
     .projects-section {
-      flex-shrink: 0;
+      flex: 0 1 min(40%, 320px);
+      min-height: 0;
+      overflow-y: auto;
+      overflow-x: hidden;
       border-top: 1px solid var(--borderMuted);
       padding: 8px 0 4px;
     }
 
     .projects-section-header {
+      position: sticky;
+      top: 0;
+      z-index: 1;
       padding: 4px 20px 6px;
       font-size: 11px;
       font-weight: 600;
       text-transform: uppercase;
       letter-spacing: 0.08em;
       color: var(--muted);
-      opacity: 0.6;
+      opacity: 0.9;
+      background: var(--bg);
     }
 
     .project-row {
@@ -618,14 +625,14 @@ export class SessionList extends LitElement {
   // ---- Render ----
 
   render() {
-    const projectsBySessionCount = this.getProjectsBySessionCountDesc();
+    const recentProjects = this.getProjectsByMostRecentDesc();
 
     return html`
       <header>
         <h1>🍕</h1>
         <button class="new-btn" @click=${this.openProjectPicker}>
           <span class="plus">+</span>
-          <span>New</span>
+          <span>New session</span>
         </button>
       </header>
 
@@ -649,9 +656,9 @@ export class SessionList extends LitElement {
 
       <div class="projects-section">
         <div class="projects-section-header">Projects</div>
-        ${projectsBySessionCount.length === 0
+        ${recentProjects.length === 0
           ? html`<div class="projects-empty">No projects found. Use pi in a project directory first.</div>`
-          : projectsBySessionCount.map(
+          : recentProjects.map(
               (p) => html`
                 <div class="project-row">
                   <div class="project-row-path">${p.displayPath}</div>
@@ -666,29 +673,13 @@ export class SessionList extends LitElement {
         ? html`
             <div class="backdrop" @click=${this.closeProjectPicker}></div>
             <div class="project-picker">
-              ${this.projects.length > 0
-                ? html`
-                    <div class="project-picker-label">Recent projects</div>
-                    ${this.projects.map(
-                      (p) => html`
-                        <button
-                          class="project-item"
-                          @click=${() => this.createSessionWithCwd(p.cwd)}
-                        >
-                          <div class="project-item-path">${p.displayPath}</div>
-                          <div class="project-item-meta">${p.sessionCount} session${p.sessionCount === 1 ? "" : "s"}</div>
-                        </button>
-                      `,
-                    )}
-                    <hr class="project-picker-divider" />
-                  `
-                : nothing}
-              <div class="project-picker-label">Enter directory path</div>
+              <div class="project-picker-label">Directory</div>
               <div class="project-cwd-form">
                 <input
                   class="project-cwd-input"
                   type="text"
                   placeholder="/path/to/project"
+                  autofocus
                   .value=${this.cwdInput}
                   @input=${(e: InputEvent) => (this.cwdInput = (e.target as HTMLInputElement).value)}
                   @keydown=${this.onCwdInputKeydown}
@@ -707,13 +698,13 @@ export class SessionList extends LitElement {
     `;
   }
 
-  private getProjectsBySessionCountDesc(): ProjectInfo[] {
+  private getProjectsByMostRecentDesc(): ProjectInfo[] {
     return [...this.projects].sort((a, b) => {
-      if (b.sessionCount !== a.sessionCount) {
-        return b.sessionCount - a.sessionCount;
-      }
-
-      return b.lastActivityAt.localeCompare(a.lastActivityAt);
+      const byActivity =
+        new Date(b.lastActivityAt).getTime() -
+        new Date(a.lastActivityAt).getTime();
+      if (byActivity !== 0) return byActivity;
+      return b.sessionCount - a.sessionCount;
     });
   }
 

@@ -223,20 +223,22 @@ test.describe("Chat View", () => {
   test("applies server state session name before send", async ({ page }) => {
     let promptSent = false;
 
-    await page.route("**/api/sessions", async (route) => {
+    await page.route(`**/api/sessions/${sessionId}`, async (route) => {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
         body: JSON.stringify({
-          sessions: [
-            {
-              id: sessionId,
-              name: "HTTP title",
-              createdAt: new Date(0).toISOString(),
-              lastActivityAt: new Date(0).toISOString(),
-              messageCount: 0,
-            },
-          ],
+          id: sessionId,
+          name: "HTTP title",
+          createdAt: new Date(0).toISOString(),
+          lastActivityAt: new Date(0).toISOString(),
+          messageStats: {
+            totalMessages: 0,
+            userMessages: 0,
+            assistantMessages: 0,
+            toolMessages: 0,
+          },
+          activity: { isWorking: false },
         }),
       });
     });
@@ -310,20 +312,22 @@ test.describe("Chat View", () => {
   test("keeps fetched session name when WS state omits sessionName", async ({
     page,
   }) => {
-    await page.route("**/api/sessions", async (route) => {
+    await page.route(`**/api/sessions/${sessionId}`, async (route) => {
       await route.fulfill({
         status: 200,
         contentType: "application/json",
         body: JSON.stringify({
-          sessions: [
-            {
-              id: sessionId,
-              name: "HTTP title",
-              createdAt: new Date(0).toISOString(),
-              lastActivityAt: new Date(0).toISOString(),
-              messageCount: 0,
-            },
-          ],
+          id: sessionId,
+          name: "HTTP title",
+          createdAt: new Date(0).toISOString(),
+          lastActivityAt: new Date(0).toISOString(),
+          messageStats: {
+            totalMessages: 0,
+            userMessages: 0,
+            assistantMessages: 0,
+            toolMessages: 0,
+          },
+          activity: { isWorking: false },
         }),
       });
     });

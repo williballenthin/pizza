@@ -12,11 +12,14 @@ import type {
   ImageContent,
   AgentMessageData,
   SessionMessageStats,
-} from "@shared/types.js";
+} from "../shared/types.js";
 
 type PendingCommand =
   | { kind: "get_state" }
-  | { kind: "get_state_with_messages"; stateData: Record<string, unknown> }
+  | {
+      kind: "get_state_with_messages";
+      stateData: Record<string, unknown>;
+    }
   | { kind: "get_available_models" }
   | { kind: "get_commands" }
   | { kind: "set_model" }
@@ -128,6 +131,7 @@ export async function handleSessionWebSocket(
           sessionId,
           sessions,
           globalModelScope,
+          requestState,
           event, // Pass the event to get original ID if needed
         );
         if (handled) {
@@ -164,6 +168,15 @@ export async function handleSessionWebSocket(
     const id = rpc.send(command);
     pendingCommands.set(id, pending);
   };
+
+  const requestState = (): void => {
+    queuePendingCommand(
+      { type: "get_state" },
+      { kind: "get_state" },
+    );
+  };
+
+  requestState();
 
   const forwardInputWithImages = (
     type: "prompt" | "steer" | "follow_up",
@@ -277,7 +290,7 @@ export async function handleSessionWebSocket(
       stopRunningLocalShell();
     },
     get_state: () => {
-      queuePendingCommand({ type: "get_state" }, { kind: "get_state" });
+      requestState();
     },
     set_model: async (msg) => {
       queuePendingCommand(
@@ -336,8 +349,6 @@ export async function handleSessionWebSocket(
       }
     },
   };
-
-  queuePendingCommand({ type: "get_state" }, { kind: "get_state" });
 
   ws.on("message", async (data) => {
     let parsed: unknown;
@@ -405,6 +416,7 @@ function handlePendingRpcResponse(
   sessionId: string,
   sessions: SessionManager,
   globalModelScope: GlobalModelScope,
+  requestState: () => void,
   _event: RpcEvent,
 ): boolean {
   switch (pending.kind) {
@@ -563,8 +575,7 @@ function handlePendingRpcResponse(
       });
 
       if (pending.includeInContext) {
-        const refreshId = rpc.send({ type: "get_state" });
-        pendingCommands.set(refreshId, { kind: "get_state" });
+        requestState();
       }
       return true;
     }
@@ -573,8 +584,7 @@ function handlePendingRpcResponse(
     case "set_thinking_level":
     case "set_steering_mode":
     case "set_follow_up_mode": {
-      const refreshId = rpc.send({ type: "get_state" });
-      pendingCommands.set(refreshId, { kind: "get_state" });
+      requestState();
       return true;
     }
 

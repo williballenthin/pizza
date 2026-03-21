@@ -12,10 +12,10 @@ import type {
   StateMessage,
   RpcEvent,
   ExtensionUIRequest,
-  SessionActivityUpdate,
 } from "@shared/types.js";
 import { extractPromptText } from "./message-shaping.js";
 import { ExtensionUiState } from "./extension-ui-state.js";
+import { subscribeSessionActivity } from "./session-activity-source.js";
 
 export interface SessionRuntimeState {
   baseMessages: AgentMessageData[];
@@ -62,7 +62,7 @@ interface PartialAssistantMessage {
 export class SessionRuntime {
   private sessionId: string;
   private ws: WebSocket | null = null;
-  private activitySource: EventSource | null = null;
+  private unsubscribeActivity: (() => void) | null = null;
   private reconnectAttempt = 0;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private listener: SessionRuntimeListener;
@@ -120,7 +120,6 @@ export class SessionRuntime {
       this.reconnectAttempt = 0;
       this.send({ type: "get_available_models" });
       this.requestCommands(true);
-      this.send({ type: "get_state" });
     };
 
     this.ws.onmessage = (ev) => {
@@ -146,43 +145,12 @@ export class SessionRuntime {
   }
 
   private connectActivitySource() {
-    if (this.activitySource) {
-      this.activitySource.close();
-    }
-
-    // Fetch initial activity status
-    this.fetchActivityStatus();
-
-    this.activitySource = new EventSource("/api/sessions/events");
-
-    this.activitySource.onmessage = (ev) => {
-      try {
-        const update: SessionActivityUpdate = JSON.parse(ev.data);
-        if (update.sessionId === this.sessionId && update.activity) {
-          this.updateState({ isAgentWorking: update.activity.isWorking });
-        }
-      } catch {
-        // Ignore parse errors
+    this.unsubscribeActivity?.();
+    this.unsubscribeActivity = subscribeSessionActivity((update) => {
+      if (update.sessionId === this.sessionId && update.activity) {
+        this.updateState({ isAgentWorking: update.activity.isWorking });
       }
-    };
-
-    this.activitySource.onerror = () => {
-      // The browser will automatically try to reconnect EventSource
-    };
-  }
-
-  private async fetchActivityStatus() {
-    try {
-      const res = await fetch("/api/sessions");
-      if (!res.ok) return;
-      const data = await res.json();
-      const session = data.sessions?.find((s: any) => s.id === this.sessionId);
-      if (session?.activity) {
-        this.updateState({ isAgentWorking: session.activity.isWorking });
-      }
-    } catch {
-      // Ignore fetch errors
-    }
+    });
   }
 
   public cleanup() {
@@ -194,9 +162,9 @@ export class SessionRuntime {
       this.ws.close();
       this.ws = null;
     }
-    if (this.activitySource) {
-      this.activitySource.close();
-      this.activitySource = null;
+    if (this.unsubscribeActivity) {
+      this.unsubscribeActivity();
+      this.unsubscribeActivity = null;
     }
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);

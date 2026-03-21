@@ -1,5 +1,5 @@
 import { readdir, readFile, rm, mkdir, appendFile, stat } from "fs/promises";
-import { join, basename } from "path";
+import { join, basename, isAbsolute } from "path";
 import { homedir } from "os";
 import { RpcProcess } from "./rpc-process.js";
 import type {
@@ -9,8 +9,12 @@ import type {
   RpcEvent,
   SessionActivityState,
   AgentMessageData,
-} from "@shared/types.js";
-import { countMessageStats, emptyMessageStats, type JsonlMessageEntry } from "@shared/session-stats.js";
+} from "../shared/types.js";
+import {
+  countMessageStats,
+  emptyMessageStats,
+  type JsonlMessageEntry,
+} from "../shared/session-stats.js";
 import type { ServerConfig } from "./config.js";
 import { encodeCwd } from "./config.js";
 import { decodeCwd } from "./project-registry.js";
@@ -77,27 +81,7 @@ export class SessionManager {
     for (const parsed of diskSessions) {
       if (Date.now() - Date.parse(parsed.lastActivityAt) > SEVEN_DAYS_MS) continue;
       seen.add(parsed.id);
-
-      const home = homedir();
-      const cwdDisplay = parsed.cwd.startsWith(home)
-        ? "~" + parsed.cwd.slice(home.length)
-        : parsed.cwd;
-
-      sessions.push(
-        this.decorateWithActivity(
-          {
-            id: parsed.id,
-            name: parsed.name || fallbackName(parsed.id),
-            createdAt: parsed.createdAt,
-            lastActivityAt: parsed.lastActivityAt,
-            messageStats: parsed.messageStats,
-            model: parsed.model,
-            cwd: cwdDisplay,
-            cwdRaw: parsed.cwd,
-          },
-          now,
-        ),
-      );
+      sessions.push(this.buildSessionMetaFromParsed(parsed, now));
     }
 
     for (const [, entry] of this.active) {
@@ -108,25 +92,7 @@ export class SessionManager {
           existing.activity = this.computeActivity(existing, now);
         }
       } else {
-        const home = homedir();
-        const cwdDisplay = entry.cwd.startsWith(home)
-          ? "~" + entry.cwd.slice(home.length)
-          : entry.cwd;
-
-        sessions.push(
-          this.decorateWithActivity(
-            {
-              id: entry.sessionId,
-              name: entry.name || "New Session",
-              createdAt: entry.createdAt,
-              lastActivityAt: entry.createdAt,
-              messageStats: emptyMessageStats(),
-              cwd: cwdDisplay,
-              cwdRaw: entry.cwd,
-            },
-            now,
-          ),
-        );
+        sessions.push(this.buildSessionMetaFromActive(entry, now));
       }
     }
 
@@ -139,6 +105,37 @@ export class SessionManager {
     return sessions;
   }
 
+  async getSessionMeta(sessionId: string): Promise<SessionMeta | null> {
+    const now = Date.now();
+    this.pruneRecentClientActivity(now);
+
+    const active = this.active.get(sessionId);
+    const loc = active?.sessionFile
+      ? {
+          bucketDir: active.bucketDir,
+          file: basename(this.resolveActiveSessionFilePath(active) || active.sessionFile),
+        }
+      : await this.findSessionFile(sessionId);
+
+    if (loc) {
+      const cwd = await decodeCwd(basename(loc.bucketDir));
+      if (cwd) {
+        const parsed = await this.parseSessionFile(loc.file, loc.bucketDir, cwd);
+        if (parsed) {
+          const meta = this.buildSessionMetaFromParsed(parsed, now);
+          if (active?.name) {
+            meta.name = active.name;
+            meta.activity = this.computeActivity(meta, now);
+          }
+          return meta;
+        }
+      }
+    }
+
+    if (!active) return null;
+    return this.buildSessionMetaFromActive(active, now);
+  }
+
   async createSession(cwd: string): Promise<string> {
     const bucketDir = join(this.config.sessionsRoot, encodeCwd(cwd));
     await mkdir(bucketDir, { recursive: true });
@@ -148,35 +145,49 @@ export class SessionManager {
       this.config.piCommand,
       cwd,
       undefined,
+      bucketDir,
       env,
     );
 
-    rpc.start();
-
-    const response = await rpc.sendAndWait({ type: "get_state" }, 15000);
-    const data = response.data as { sessionId: string; sessionFile?: string };
-    const sessionId = data.sessionId;
-    const sessionFile = data.sessionFile;
-
-    const entry: ActiveSession = {
-      rpc,
-      sessionId,
-      sessionFile,
-      bucketDir,
-      cwd,
-      name: undefined,
-      createdAt: new Date().toISOString(),
-      idleTimer: null,
-      clients: new Set(),
-      isAgentWorking: false,
+    let startupError: Error | null = null;
+    const captureStartupError = (err: Error) => {
+      startupError = err;
     };
+    rpc.on("error", captureStartupError);
 
-    this.bindRpcHandlers(entry);
+    try {
+      rpc.start();
 
-    this.startIdleTimer(sessionId, entry);
-    this.active.set(sessionId, entry);
+      const response = await rpc.sendAndWait({ type: "get_state" }, 15000);
+      const data = response.data as { sessionId: string; sessionFile?: string };
+      const sessionId = data.sessionId;
+      const sessionFile = data.sessionFile;
 
-    return sessionId;
+      const entry: ActiveSession = {
+        rpc,
+        sessionId,
+        sessionFile,
+        bucketDir,
+        cwd,
+        name: undefined,
+        createdAt: new Date().toISOString(),
+        idleTimer: null,
+        clients: new Set(),
+        isAgentWorking: false,
+      };
+
+      rpc.removeListener("error", captureStartupError);
+      this.bindRpcHandlers(entry);
+
+      this.startIdleTimer(sessionId, entry);
+      this.active.set(sessionId, entry);
+
+      return sessionId;
+    } catch (err) {
+      rpc.removeListener("error", captureStartupError);
+      rpc.stop();
+      throw startupError ?? err;
+    }
   }
 
   async getSessionCwd(sessionId: string): Promise<string | null> {
@@ -232,9 +243,7 @@ export class SessionManager {
   async deleteSession(id: string): Promise<boolean> {
     const active = this.active.get(id);
     if (active) {
-      active.rpc.stop();
-      if (active.idleTimer) clearTimeout(active.idleTimer);
-      this.active.delete(id);
+      await this.stopActiveSession(id, active, "delete_session");
     }
 
     const loc = await this.findSessionFile(id);
@@ -278,7 +287,9 @@ export class SessionManager {
     }
 
     const loc = await this.findSessionFile(sessionId);
-    const cwd = loc ? (await decodeCwd(loc.bucketDir.split("/").pop()!) ?? process.cwd()) : process.cwd();
+    const cwd = loc
+      ? (await decodeCwd(basename(loc.bucketDir))) ?? process.cwd()
+      : process.cwd();
     const bucketDir = loc ? loc.bucketDir : join(this.config.sessionsRoot, encodeCwd(cwd));
 
     const env = this.buildEnv();
@@ -286,6 +297,7 @@ export class SessionManager {
       this.config.piCommand,
       cwd,
       loc ? join(loc.bucketDir, loc.file) : undefined,
+      loc?.bucketDir,
       env,
     );
 
@@ -330,6 +342,17 @@ export class SessionManager {
     }
   }
 
+  async stopSession(id: string, reason = "api_stop"): Promise<boolean> {
+    const active = this.active.get(id);
+    if (active) {
+      await this.stopActiveSession(id, active, reason);
+      return true;
+    }
+
+    const loc = await this.findSessionFile(id);
+    return !!loc;
+  }
+
   shutdown(): void {
     for (const [, entry] of this.active) {
       if (entry.idleTimer) clearTimeout(entry.idleTimer);
@@ -351,6 +374,22 @@ export class SessionManager {
     for (const listener of this.activityListeners) {
       listener(update);
     }
+  }
+
+  private async stopActiveSession(
+    sessionId: string,
+    entry: ActiveSession,
+    reason: string,
+  ): Promise<void> {
+    console.log(`[session:${sessionId}] stopping (${reason})`);
+    if (entry.idleTimer) {
+      clearTimeout(entry.idleTimer);
+      entry.idleTimer = null;
+    }
+    this.recentClientActivityAt.delete(sessionId);
+    this.active.delete(sessionId);
+    this.broadcastActivity(sessionId);
+    await entry.rpc.stop();
   }
 
   private bindRpcHandlers(entry: ActiveSession): void {
@@ -404,6 +443,8 @@ export class SessionManager {
     entry.idleTimer = setTimeout(() => {
       entry.rpc.stop();
       this.active.delete(sessionId);
+      this.recentClientActivityAt.delete(sessionId);
+      this.broadcastActivity(sessionId);
     }, this.config.idleTimeoutMs);
   }
 
@@ -638,6 +679,60 @@ export class SessionManager {
       ...meta,
       activity: this.computeActivity(meta, now),
     };
+  }
+
+  private buildSessionMetaFromParsed(
+    parsed: ParsedSessionFile,
+    now: number,
+  ): SessionMeta {
+    const home = homedir();
+    const cwdDisplay = parsed.cwd.startsWith(home)
+      ? "~" + parsed.cwd.slice(home.length)
+      : parsed.cwd;
+
+    return this.decorateWithActivity(
+      {
+        id: parsed.id,
+        name: parsed.name || fallbackName(parsed.id),
+        createdAt: parsed.createdAt,
+        lastActivityAt: parsed.lastActivityAt,
+        messageStats: parsed.messageStats,
+        model: parsed.model,
+        cwd: cwdDisplay,
+        cwdRaw: parsed.cwd,
+      },
+      now,
+    );
+  }
+
+  private buildSessionMetaFromActive(
+    entry: ActiveSession,
+    now: number,
+  ): SessionMeta {
+    const home = homedir();
+    const cwdDisplay = entry.cwd.startsWith(home)
+      ? "~" + entry.cwd.slice(home.length)
+      : entry.cwd;
+
+    return this.decorateWithActivity(
+      {
+        id: entry.sessionId,
+        name: entry.name || "New Session",
+        createdAt: entry.createdAt,
+        lastActivityAt: entry.createdAt,
+        messageStats: emptyMessageStats(),
+        cwd: cwdDisplay,
+        cwdRaw: entry.cwd,
+      },
+      now,
+    );
+  }
+
+  private resolveActiveSessionFilePath(entry: ActiveSession): string | null {
+    if (!entry.sessionFile) return null;
+    return isAbsolute(entry.sessionFile)
+      ? entry.sessionFile
+      : join(entry.bucketDir, entry.sessionFile);
   }
 
   private computeActivity(

@@ -4,6 +4,12 @@ import { homedir } from "os";
 
 const decodeCache = new Map<string, string | null>();
 
+interface DecodeState {
+  parentPath: string;
+  currentComponent: string;
+  index: number;
+}
+
 export async function decodeCwd(encoded: string): Promise<string | null> {
   if (decodeCache.has(encoded)) return decodeCache.get(encoded)!;
 
@@ -19,9 +25,48 @@ export async function decodeCwd(encoded: string): Promise<string | null> {
     return null;
   }
 
-  const result = await backtrack(segments, 1, "/", segments[0]);
-  decodeCache.set(encoded, result);
-  return result;
+  for (const state of getInitialDecodeStates(segments)) {
+    const result = await backtrack(
+      segments,
+      state.index,
+      state.parentPath,
+      state.currentComponent,
+    );
+    if (result) {
+      decodeCache.set(encoded, result);
+      return result;
+    }
+  }
+
+  decodeCache.set(encoded, null);
+  return null;
+}
+
+function getInitialDecodeStates(segments: string[]): DecodeState[] {
+  const states: DecodeState[] = [];
+
+  if (
+    segments.length >= 3 &&
+    /^[A-Za-z]$/.test(segments[0]) &&
+    segments[1] === "" &&
+    segments[2]
+  ) {
+    states.push({
+      parentPath: `${segments[0]}:\\`,
+      currentComponent: segments[2],
+      index: 3,
+    });
+  }
+
+  if (segments[0]) {
+    states.push({
+      parentPath: "/",
+      currentComponent: segments[0],
+      index: 1,
+    });
+  }
+
+  return states;
 }
 
 async function backtrack(

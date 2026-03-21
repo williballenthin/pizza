@@ -1,6 +1,6 @@
 import { LitElement } from "lit";
 import { customElement, property, state } from "lit/decorators.js";
-import type { SessionMeta, SessionActivityUpdate } from "@shared/types.js";
+import type { SessionMeta } from "@shared/types.js";
 import { isArchivedSessionName, unarchiveSessionName } from "@shared/session-archive.js";
 import {
   fetchSessionGitCommitFiles,
@@ -18,6 +18,7 @@ import {
   CURRENT_INDEX_SELECTION,
 } from "../utils/render-chat-sidebar.js";
 import type { SidebarFilterMode, SidebarEntry } from "../utils/message-shaping.js";
+import { subscribeSessionActivity } from "../utils/session-activity-source.js";
 
 @customElement("session-sidebar")
 export class SessionSidebar extends LitElement {
@@ -42,8 +43,7 @@ export class SessionSidebar extends LitElement {
   @state() private diffText = "";
   @state() private diffLoading = false;
 
-  private sessionsEventSource: EventSource | null = null;
-  private sessionsSSEHasConnected = false;
+  private unsubscribeSessionsActivity: (() => void) | null = null;
   private gitRefreshTimer: ReturnType<typeof setInterval> | null = null;
   private gitRequestId = 0;
   private diffRequestId = 0;
@@ -52,7 +52,6 @@ export class SessionSidebar extends LitElement {
     super.connectedCallback();
     void this.loadOtherSessions();
     this.connectSessionsSSE();
-    void this.refreshGitData(true);
     this.startGitPolling();
   }
 
@@ -81,18 +80,8 @@ export class SessionSidebar extends LitElement {
   }
 
   private connectSessionsSSE() {
-    this.sessionsEventSource = new EventSource("/api/sessions/events");
-    this.sessionsSSEHasConnected = false;
-
-    this.sessionsEventSource.onopen = () => {
-      if (this.sessionsSSEHasConnected) {
-        void this.loadOtherSessions();
-      }
-      this.sessionsSSEHasConnected = true;
-    };
-
-    this.sessionsEventSource.onmessage = (e) => {
-      const update: SessionActivityUpdate = JSON.parse(e.data);
+    this.unsubscribeSessionsActivity?.();
+    this.unsubscribeSessionsActivity = subscribeSessionActivity((update) => {
       const session = this.otherSessions.find((s) => s.id === update.sessionId);
       if (session) {
         session.activity = update.activity;
@@ -104,13 +93,13 @@ export class SessionSidebar extends LitElement {
       if (update.sessionId === this.sessionId) {
         void this.refreshGitData(false);
       }
-    };
+    });
   }
 
   private disconnectSessionsSSE() {
-    if (this.sessionsEventSource) {
-      this.sessionsEventSource.close();
-      this.sessionsEventSource = null;
+    if (this.unsubscribeSessionsActivity) {
+      this.unsubscribeSessionsActivity();
+      this.unsubscribeSessionsActivity = null;
     }
   }
 

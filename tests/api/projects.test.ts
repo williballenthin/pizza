@@ -48,7 +48,7 @@ describe("GET /api/projects", () => {
       port: 0,
       sessionsRoot,
       idleTimeoutMs: 5000,
-      piCommand: "pi",
+      piCommand: process.env.PI_COMMAND || "pi",
     };
     app = createApp(config);
     await new Promise<void>((resolve) => {
@@ -96,7 +96,7 @@ describe("POST /api/sessions with cwd validation", () => {
       port: 0,
       sessionsRoot,
       idleTimeoutMs: 5000,
-      piCommand: "pi",
+      piCommand: process.env.PI_COMMAND || "pi",
     };
     app = createApp(config);
     await new Promise<void>((resolve) => {
@@ -163,7 +163,7 @@ describe("GET /api/sessions returns cwd per session", () => {
       port: 0,
       sessionsRoot,
       idleTimeoutMs: 5000,
-      piCommand: "pi",
+      piCommand: process.env.PI_COMMAND || "pi",
     };
     app = createApp(config);
     await new Promise<void>((resolve) => {

@@ -3,11 +3,20 @@ import type { SessionMessageStats } from "@shared/types.js";
 import { emptyMessageStats } from "@shared/session-stats.js";
 
 export interface SessionInfo {
+  id?: string;
   name: string;
   createdAt: string;
   lastActivityAt: string;
   messageStats: SessionMessageStats;
   cwd?: string;
+  activity?: {
+    isWorking: boolean;
+  };
+}
+
+interface SessionInfoResult {
+  status: "found" | "not-found" | "error";
+  info: SessionInfo | null;
 }
 
 export interface RuntimeInfo {
@@ -46,24 +55,39 @@ export interface GitCommitSummary {
   subject: string;
 }
 
-export async function fetchSessionInfo(sessionId: string): Promise<SessionInfo | null> {
-  try {
-    const res = await fetch("/api/sessions");
-    if (!res.ok) return null;
-    const data = await res.json();
-    const session = data.sessions.find((s: any) => s.id === sessionId);
-    if (!session) return null;
+function mapSessionInfo(session: any): SessionInfo {
+  return {
+    id: typeof session?.id === "string" ? session.id : undefined,
+    name: session?.name || "Session",
+    createdAt: session?.createdAt || "",
+    lastActivityAt: session?.lastActivityAt || "",
+    messageStats: session?.messageStats || emptyMessageStats(),
+    cwd: typeof session?.cwd === "string" ? session.cwd : undefined,
+    activity:
+      session?.activity && typeof session.activity.isWorking === "boolean"
+        ? { isWorking: session.activity.isWorking }
+        : undefined,
+  };
+}
 
-    return {
-      name: session.name || "Session",
-      createdAt: session.createdAt || "",
-      lastActivityAt: session.lastActivityAt || "",
-      messageStats: session.messageStats || emptyMessageStats(),
-      cwd: typeof session.cwd === "string" ? session.cwd : undefined,
-    };
+export async function fetchSessionInfoResult(
+  sessionId: string,
+): Promise<SessionInfoResult> {
+  try {
+    const res = await fetch(`/api/sessions/${encodeURIComponent(sessionId)}`);
+    return res.status === 404
+      ? { status: "not-found", info: null }
+      : res.ok
+        ? { status: "found", info: mapSessionInfo(await res.json()) }
+        : { status: "error", info: null };
   } catch {
-    return null;
+    return { status: "error", info: null };
   }
+}
+
+export async function fetchSessionInfo(sessionId: string): Promise<SessionInfo | null> {
+  const result = await fetchSessionInfoResult(sessionId);
+  return result.status === "found" ? result.info : null;
 }
 
 export async function fetchRuntimeInfo(): Promise<RuntimeInfo | null> {
@@ -176,6 +200,17 @@ export async function patchSessionName(sessionId: string, name: string): Promise
   } catch {
     return false;
   }
+}
+
+export function stopSessionProcess(sessionId: string): void {
+  if (!sessionId) return;
+  const params = new URLSearchParams({ reason: "client_leave" });
+  void fetch(`/api/sessions/${encodeURIComponent(sessionId)}/stop?${params.toString()}`, {
+    method: "POST",
+    keepalive: true,
+  }).catch(() => {
+    // Ignore stop failures during navigation/teardown.
+  });
 }
 
 export async function unarchiveSessionIfNeeded(
